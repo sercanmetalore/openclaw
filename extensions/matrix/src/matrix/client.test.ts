@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../types.js";
 import {
+  resolveImplicitMatrixAccountId,
   resolveMatrixAuth,
   resolveMatrixAuthContext,
   resolveMatrixConfig,
@@ -127,6 +128,23 @@ describe("resolveMatrixConfig", () => {
       deviceName: "OpenClaw Gateway Pinguini",
       encryption: true,
     });
+  });
+
+  it("ignores typoed defaultAccount values that do not map to a real Matrix account", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          defaultAccount: "ops",
+          homeserver: "https://legacy.example.org",
+          accessToken: "legacy-token",
+        },
+      },
+    } as CoreConfig;
+
+    expect(resolveImplicitMatrixAccountId(cfg, {} as NodeJS.ProcessEnv)).toBeNull();
+    expect(resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv }).accountId).toBe(
+      "default",
+    );
   });
 });
 

@@ -438,6 +438,74 @@ describe("matrix directory", () => {
     }
   });
 
+  it("clears stored auth fields when switching a Matrix account to env-backed auth", () => {
+    const envKeys = {
+      MATRIX_OPS_HOMESERVER: process.env.MATRIX_OPS_HOMESERVER,
+      MATRIX_OPS_ACCESS_TOKEN: process.env.MATRIX_OPS_ACCESS_TOKEN,
+      MATRIX_OPS_DEVICE_ID: process.env.MATRIX_OPS_DEVICE_ID,
+      MATRIX_OPS_DEVICE_NAME: process.env.MATRIX_OPS_DEVICE_NAME,
+    };
+    process.env.MATRIX_OPS_HOMESERVER = "https://ops.env.example.org";
+    process.env.MATRIX_OPS_ACCESS_TOKEN = "ops-env-token";
+    process.env.MATRIX_OPS_DEVICE_ID = "OPSENVDEVICE";
+    process.env.MATRIX_OPS_DEVICE_NAME = "Ops Env Device";
+
+    try {
+      const cfg = {
+        channels: {
+          matrix: {
+            accounts: {
+              ops: {
+                homeserver: "https://ops.inline.example.org",
+                userId: "@ops:inline.example.org",
+                accessToken: "ops-inline-token",
+                password: "ops-inline-password", // pragma: allowlist secret
+                deviceId: "OPSINLINEDEVICE",
+                deviceName: "Ops Inline Device",
+                encryption: true,
+              },
+            },
+          },
+        },
+      } as unknown as CoreConfig;
+
+      const updated = matrixPlugin.setup!.applyAccountConfig({
+        cfg,
+        accountId: "ops",
+        input: {
+          useEnv: true,
+          name: "Ops",
+        },
+      }) as CoreConfig;
+
+      expect(updated.channels?.["matrix"]?.accounts?.ops).toMatchObject({
+        name: "Ops",
+        enabled: true,
+        encryption: true,
+      });
+      expect(updated.channels?.["matrix"]?.accounts?.ops?.homeserver).toBeUndefined();
+      expect(updated.channels?.["matrix"]?.accounts?.ops?.userId).toBeUndefined();
+      expect(updated.channels?.["matrix"]?.accounts?.ops?.accessToken).toBeUndefined();
+      expect(updated.channels?.["matrix"]?.accounts?.ops?.password).toBeUndefined();
+      expect(updated.channels?.["matrix"]?.accounts?.ops?.deviceId).toBeUndefined();
+      expect(updated.channels?.["matrix"]?.accounts?.ops?.deviceName).toBeUndefined();
+      expect(resolveMatrixConfigForAccount(updated, "ops", process.env)).toMatchObject({
+        homeserver: "https://ops.env.example.org",
+        accessToken: "ops-env-token",
+        deviceId: "OPSENVDEVICE",
+        deviceName: "Ops Env Device",
+      });
+    } finally {
+      for (const [key, value] of Object.entries(envKeys)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+  });
+
   it("resolves account id from input name when explicit account id is missing", () => {
     const accountId = matrixPlugin.setup!.resolveAccountId?.({
       cfg: {} as CoreConfig,

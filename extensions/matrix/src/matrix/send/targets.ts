@@ -20,8 +20,20 @@ export function normalizeThreadId(raw?: string | number | null): string | null {
 
 // Size-capped to prevent unbounded growth (#4948)
 const MAX_DIRECT_ROOM_CACHE_SIZE = 1024;
-const directRoomCache = new Map<string, string>();
-function setDirectRoomCached(key: string, value: string): void {
+const directRoomCacheByClient = new WeakMap<MatrixClient, Map<string, string>>();
+
+function resolveDirectRoomCache(client: MatrixClient): Map<string, string> {
+  const existing = directRoomCacheByClient.get(client);
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, string>();
+  directRoomCacheByClient.set(client, created);
+  return created;
+}
+
+function setDirectRoomCached(client: MatrixClient, key: string, value: string): void {
+  const directRoomCache = resolveDirectRoomCache(client);
   directRoomCache.set(key, value);
   if (directRoomCache.size > MAX_DIRECT_ROOM_CACHE_SIZE) {
     const oldest = directRoomCache.keys().next().value;
@@ -66,6 +78,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
     throw new Error(`Matrix user IDs must be fully qualified (got "${trimmed}")`);
   }
 
+  const directRoomCache = resolveDirectRoomCache(client);
   const cached = directRoomCache.get(trimmed);
   if (cached) {
     return cached;
@@ -79,16 +92,15 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
     >;
     const list = Array.isArray(directContent?.[trimmed]) ? directContent[trimmed] : [];
     if (list && list.length > 0) {
-      setDirectRoomCached(trimmed, list[0]);
+      setDirectRoomCached(client, trimmed, list[0]);
       return list[0];
     }
   } catch {
     // Ignore and fall back.
   }
 
-  // 2) Fallback: look for an existing joined room that looks like a 1:1 with the user.
+  // 2) Fallback: look for an existing joined room that is actually a 1:1 with the user.
   // Many clients only maintain m.direct for *their own* account data, so relying on it is brittle.
-  let fallbackRoom: string | null = null;
   try {
     const rooms = await client.getJoinedRooms();
     for (const roomId of rooms) {
@@ -101,24 +113,14 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
       if (!members.includes(trimmed)) {
         continue;
       }
-      // Prefer classic 1:1 rooms, but allow larger rooms if requested.
       if (members.length === 2) {
-        setDirectRoomCached(trimmed, roomId);
+        setDirectRoomCached(client, trimmed, roomId);
         await persistDirectRoom(client, trimmed, roomId);
         return roomId;
-      }
-      if (!fallbackRoom) {
-        fallbackRoom = roomId;
       }
     }
   } catch {
     // Ignore and fall back.
-  }
-
-  if (fallbackRoom) {
-    setDirectRoomCached(trimmed, fallbackRoom);
-    await persistDirectRoom(client, trimmed, fallbackRoom);
-    return fallbackRoom;
   }
 
   throw new Error(`No direct room found for ${trimmed} (m.direct missing)`);

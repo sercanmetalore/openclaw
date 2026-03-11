@@ -72,7 +72,7 @@ describe("resolveMatrixRoomId", () => {
     expect(setAccountData).toHaveBeenCalled();
   });
 
-  it("allows larger rooms when no 1:1 match exists", async () => {
+  it("does not fall back to larger shared rooms for direct-user sends", async () => {
     const userId = "@group:example.org";
     const roomId = "!group:example.org";
     const client = {
@@ -84,9 +84,11 @@ describe("resolveMatrixRoomId", () => {
       setAccountData: vi.fn().mockResolvedValue(undefined),
     } as unknown as MatrixClient;
 
-    const resolved = await resolveMatrixRoomId(client, userId);
-
-    expect(resolved).toBe(roomId);
+    await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
+      `No direct room found for ${userId} (m.direct missing)`,
+    );
+    // oxlint-disable-next-line typescript/unbound-method
+    expect(client.setAccountData).not.toHaveBeenCalled();
   });
 
   it("accepts nested Matrix user target prefixes", async () => {
@@ -107,6 +109,36 @@ describe("resolveMatrixRoomId", () => {
     expect(resolved).toBe(roomId);
     // oxlint-disable-next-line typescript/unbound-method
     expect(client.resolveRoom).not.toHaveBeenCalled();
+  });
+
+  it("scopes direct-room cache per Matrix client", async () => {
+    const userId = "@shared:example.org";
+    const clientA = {
+      getAccountData: vi.fn().mockResolvedValue({
+        [userId]: ["!room-a:example.org"],
+      }),
+      getJoinedRooms: vi.fn(),
+      getJoinedRoomMembers: vi.fn(),
+      setAccountData: vi.fn(),
+      resolveRoom: vi.fn(),
+    } as unknown as MatrixClient;
+    const clientB = {
+      getAccountData: vi.fn().mockResolvedValue({
+        [userId]: ["!room-b:example.org"],
+      }),
+      getJoinedRooms: vi.fn(),
+      getJoinedRoomMembers: vi.fn(),
+      setAccountData: vi.fn(),
+      resolveRoom: vi.fn(),
+    } as unknown as MatrixClient;
+
+    await expect(resolveMatrixRoomId(clientA, userId)).resolves.toBe("!room-a:example.org");
+    await expect(resolveMatrixRoomId(clientB, userId)).resolves.toBe("!room-b:example.org");
+
+    // oxlint-disable-next-line typescript/unbound-method
+    expect(clientA.getAccountData).toHaveBeenCalledTimes(1);
+    // oxlint-disable-next-line typescript/unbound-method
+    expect(clientB.getAccountData).toHaveBeenCalledTimes(1);
   });
 });
 

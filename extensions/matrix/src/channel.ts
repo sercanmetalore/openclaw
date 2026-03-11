@@ -6,6 +6,7 @@ import {
   formatPairingApproveHint,
   moveSingleAccountChannelSectionToDefaultAccount,
   normalizeAccountId,
+  normalizeSecretInputString,
   PAIRING_APPROVED_MESSAGE,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -331,16 +332,18 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       });
       const next = namedConfig as CoreConfig;
       if (input.useEnv) {
-        return setAccountEnabledInConfigSection({
-          cfg: next as CoreConfig,
-          sectionKey: "matrix",
-          accountId,
+        return updateMatrixAccountConfig(next, accountId, {
           enabled: true,
-          allowTopLevel: true,
-        }) as CoreConfig;
+          homeserver: null,
+          userId: null,
+          accessToken: null,
+          password: null,
+          deviceId: null,
+          deviceName: null,
+        });
       }
       const accessToken = input.accessToken?.trim();
-      const password = input.password?.trim();
+      const password = normalizeSecretInputString(input.password);
       const userId = input.userId?.trim();
       return updateMatrixAccountConfig(next as CoreConfig, accountId, {
         homeserver: input.homeserver?.trim(),

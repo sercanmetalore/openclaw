@@ -288,15 +288,15 @@ export function resolveImplicitMatrixAccountId(
   cfg: CoreConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
+  const accountIds = listNormalizedMatrixAccountIds(cfg);
   const configuredDefault = normalizeOptionalAccountId(cfg.channels?.matrix?.defaultAccount);
-  if (configuredDefault) {
+  if (configuredDefault && accountIds.includes(configuredDefault)) {
     const resolved = resolveMatrixConfigForAccount(cfg, configuredDefault, env);
     if (hasMatrixAuthInputs(resolved)) {
       return configuredDefault;
     }
   }
 
-  const accountIds = listNormalizedMatrixAccountIds(cfg);
   if (accountIds.length === 0) {
     return null;
   }
