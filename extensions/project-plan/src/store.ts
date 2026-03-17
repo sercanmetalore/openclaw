@@ -83,12 +83,21 @@ export async function savePlan(
   }
   plan.updatedAt = Date.now();
   const dir = path.join(pluginDir(stateDir), PLANS_SUBDIR);
-  await ensureDir(dir);
-  await fs.writeFile(
-    planFilePath(stateDir, plan.id),
-    `${JSON.stringify(plan, null, 2)}\n`,
-    "utf8",
+  const finalPath = planFilePath(stateDir, plan.id);
+  // Write via temp + rename so concurrent readers never see partial JSON.
+  const tempPath = path.join(
+    dir,
+    `${plan.id}.json.tmp-${process.pid}-${Date.now()}-${crypto.randomUUID()}`,
   );
+  await ensureDir(dir);
+  const payload = `${JSON.stringify(plan, null, 2)}\n`;
+  await fs.writeFile(tempPath, payload, "utf8");
+  try {
+    await fs.rename(tempPath, finalPath);
+  } catch (error) {
+    await fs.unlink(tempPath).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function deletePlan(stateDir: string, planId: string): Promise<boolean> {
