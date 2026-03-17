@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/project-plan",
+  "version": "2026.3.14",
+  "description": "Project plan manager with AI agent automation for OpenClaw",
+  "type": "module",
+  "dependencies": {},
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

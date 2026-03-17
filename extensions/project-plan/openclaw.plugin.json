@@ -1,0 +1,33 @@
+{
+  "id": "project-plan",
+  "name": "Project Plan",
+  "description": "Manage project plans and automate task execution with registered AI agents. Supports GitHub, GitLab, Jira, Azure DevOps, and local plans.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "maxLogEntries": {
+        "type": "number",
+        "minimum": 10,
+        "maximum": 10000
+      },
+      "itemTimeoutMinutes": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 480
+      }
+    }
+  },
+  "uiHints": {
+    "maxLogEntries": {
+      "label": "Max Log Entries Per Plan",
+      "help": "Maximum number of log entries to keep per project plan (default: 500).",
+      "advanced": true
+    },
+    "itemTimeoutMinutes": {
+      "label": "Item Timeout (minutes)",
+      "help": "Maximum time the agent is allowed per plan item before it is marked as failed (default: 30).",
+      "advanced": true
+    }
+  }
+}
