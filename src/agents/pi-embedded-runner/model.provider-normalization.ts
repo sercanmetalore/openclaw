@@ -10,6 +10,35 @@ function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
   return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(trimmed);
 }
 
+function normalizeGitHubCopilotTransport(params: {
+  provider: string;
+  model: Model<Api>;
+}): Model<Api> {
+  if (normalizeProviderId(params.provider) !== "github-copilot") {
+    return params.model;
+  }
+
+  if (params.model.api !== "github-copilot") {
+    return params.model;
+  }
+
+  const normalizedModelId = params.model.id.trim().toLowerCase();
+  let api: Api = "openai-completions";
+
+  if (normalizedModelId.includes("claude")) {
+    api = "anthropic-messages";
+  } else if (normalizedModelId.includes("codex")) {
+    api = "openai-codex-responses";
+  } else if (normalizedModelId.startsWith("gpt-5")) {
+    api = "openai-responses";
+  }
+
+  return {
+    ...params.model,
+    api,
+  } as Model<Api>;
+}
+
 function normalizeOpenAITransport(params: { provider: string; model: Model<Api> }): Model<Api> {
   if (normalizeProviderId(params.provider) !== "openai") {
     return params.model;
@@ -33,7 +62,11 @@ export function applyBuiltInResolvedProviderTransportNormalization(params: {
   provider: string;
   model: Model<Api>;
 }): Model<Api> {
-  return normalizeOpenAITransport(params);
+  const githubCopilotNormalized = normalizeGitHubCopilotTransport(params);
+  return normalizeOpenAITransport({
+    ...params,
+    model: githubCopilotNormalized,
+  });
 }
 
 export function normalizeResolvedProviderModel(params: {
