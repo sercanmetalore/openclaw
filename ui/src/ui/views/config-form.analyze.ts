@@ -97,10 +97,12 @@ function normalizeSchemaNode(
     if (!itemsSchema) {
       unsupported.add(pathLabel);
     } else {
-      const res = normalizeSchemaNode(itemsSchema, [...path, "*"]);
+      // Analyze array item shape against the same logical path so only truly
+      // unsupported leaf nodes are flagged, not the whole array container.
+      const res = normalizeSchemaNode(itemsSchema, path);
       normalized.items = res.schema ?? itemsSchema;
-      if (res.unsupportedPaths.length > 0) {
-        unsupported.add(pathLabel);
+      for (const entry of res.unsupportedPaths) {
+        unsupported.add(entry);
       }
     }
   } else if (

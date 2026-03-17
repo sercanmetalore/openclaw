@@ -464,4 +464,28 @@ describe("config form renderer", () => {
     removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["accounts"], {});
   });
+
+  it("does not mark the whole array unsupported when only an item field is unsupported", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        agents: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              setupCommand: {
+                allOf: [{ type: "string" }, { minLength: 1 }],
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("agents");
+    expect(analysis.unsupportedPaths).toContain("agents.setupCommand");
+  });
 });
