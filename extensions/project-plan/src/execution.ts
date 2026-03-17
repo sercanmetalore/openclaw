@@ -116,7 +116,7 @@ export function findNextExecutableItem(plan: ProjectPlanRecord): ProjectPlanItem
   return [...plan.items]
     .sort((a, b) => a.order - b.order)
     .find((item) =>
-      item.status === "to do"
+      (item.status === "in progress" || item.status === "to do")
       && isExecutableItem(item, index)
       && !hasCancelledAncestor(item, index),
     );

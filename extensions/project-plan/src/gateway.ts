@@ -388,12 +388,13 @@ export function registerGatewayMethods(
   api.registerGatewayMethod("plugin.plan.item.update", async (req) => {
     try {
       const dir = await stateDir();
-      const { planId, itemId, title, description, assignedAgentId } = req.params as {
+      const { planId, itemId, title, description, assignedAgentId, status } = req.params as {
         planId: string;
         itemId: string;
         title: string;
         description?: string;
         assignedAgentId?: string | null;
+        status?: ProjectPlanStatus;
       };
       const plan = await loadPlan(dir, planId);
       if (!plan) { req.respond(false, undefined, { message: "Plan not found" }); return; }
@@ -402,6 +403,7 @@ export function registerGatewayMethods(
       item.title = title;
       item.description = description;
       item.assignedAgentId = assignedAgentId ?? undefined;
+      if (status !== undefined) item.status = status;
       item.updatedAt = Date.now();
       recomputeContainerStatuses(plan);
       await savePlan(dir, plan, opts);

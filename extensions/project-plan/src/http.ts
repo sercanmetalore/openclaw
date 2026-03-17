@@ -409,7 +409,12 @@ export function createHttpHandler(params: {
           }
 
           if (method === "PUT" && itemSub === "") {
-            const body = (await readBody(req)) as { title?: string; description?: string; assignedAgentId?: string | null };
+            const body = (await readBody(req)) as {
+              title?: string;
+              description?: string;
+              assignedAgentId?: string | null;
+              status?: ProjectPlanStatus;
+            };
             const plan = await loadPlan(stateDir, planId);
             if (!plan) return err(res, 404, "Plan not found"), true;
             const item = plan.items.find((i) => i.id === itemId);
@@ -417,6 +422,7 @@ export function createHttpHandler(params: {
             if (body.title !== undefined) item.title = body.title;
             if ("description" in body) item.description = body.description;
             if ("assignedAgentId" in body) item.assignedAgentId = body.assignedAgentId ?? undefined;
+            if ("status" in body && body.status !== undefined) item.status = body.status;
             item.updatedAt = Date.now();
             recomputeContainerStatuses(plan);
             await savePlan(stateDir, plan, opts);

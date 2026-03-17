@@ -152,6 +152,16 @@ hr.divider{border:none;border-top:1px solid #2a2a30;margin:4px 0}
           <option value="subtask">Subtask</option>
         </select>
       </div>
+      <div class="field"><label>Status</label>
+        <select id="it-status">
+          <option value="to do">To Do</option>
+          <option value="in progress">In Progress</option>
+          <option value="blocked">Blocked</option>
+          <option value="done">Done</option>
+          <option value="failed">Failed</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
     </div>
     <div class="field"><label>Description</label><textarea id="it-desc" rows="3"></textarea></div>
     <div class="field"><label>Parent item ID (optional)</label><input id="it-parent" placeholder="Leave blank for top-level"/></div>
@@ -689,6 +699,7 @@ function openItemForm(item) {
   el('item-modal-title').textContent = item ? 'Edit Item' : 'Add Item';
   el('it-title').value   = item?.title || '';
   el('it-type').value    = item?.type  || 'task';
+  el('it-status').value  = item?.status || 'to do';
   el('it-desc').value    = item?.description || '';
   el('it-parent').value  = item?.parentId || '';
   el('it-agent').value   = item?.assignedAgentId || '';
@@ -703,6 +714,7 @@ el('btn-item-save').addEventListener('click', async () => {
   if (!title) { el('it-title').focus(); return; }
   const editId = el('it-edit-id').value;
   const body = { title, type: el('it-type').value,
+    status: editId ? el('it-status').value : undefined,
     description: el('it-desc').value || undefined,
     parentId: el('it-parent').value || undefined,
     assignedAgentId: el('it-agent').value || undefined };
