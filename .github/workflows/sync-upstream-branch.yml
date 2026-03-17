@@ -1,0 +1,66 @@
+name: Sync Upstream Branch
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Fork branch to sync"
+        required: false
+        default: "mtlr_srcn"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-branch
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: mtlr_srcn
+  UPSTREAM_REPO: https://github.com/openclaw/openclaw.git
+  UPSTREAM_BRANCH: main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      SYNC_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.target_branch || 'mtlr_srcn' }}
+
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_branch || env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch target and upstream branches
+        run: |
+          git remote add upstream "${UPSTREAM_REPO}" || git remote set-url upstream "${UPSTREAM_REPO}"
+          git fetch origin "${SYNC_BRANCH}"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+      - name: Check whether sync is needed
+        id: check
+        run: |
+          behind_count="$(git rev-list --count "origin/${SYNC_BRANCH}..upstream/${UPSTREAM_BRANCH}")"
+          echo "behind_count=${behind_count}" >> "$GITHUB_OUTPUT"
+          if [ "${behind_count}" -eq 0 ]; then
+            echo "No upstream changes to merge."
+          fi
+
+      - name: Merge upstream into target branch
+        if: steps.check.outputs.behind_count != '0'
+        run: |
+          git checkout "${SYNC_BRANCH}"
+          git merge --no-edit "upstream/${UPSTREAM_BRANCH}"
+
+      - name: Push updated branch
+        if: steps.check.outputs.behind_count != '0'
+        run: git push origin "HEAD:${SYNC_BRANCH}"
