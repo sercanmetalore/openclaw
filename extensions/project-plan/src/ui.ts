@@ -416,11 +416,18 @@ function renderContent() {
 
 function renderTab() {
   const tb = el('tab-body'); if (!tb || !state.detail) return;
+  syncTabClasses();
   const { plan, dashboard } = state.detail;
   if (state.tab === 'items')     { tb.innerHTML = renderItems(plan); bindItemActions(plan); }
   if (state.tab === 'settings')  { tb.innerHTML = renderSettings(plan); bindSettings(plan); }
   if (state.tab === 'logs')      { tb.innerHTML = renderLogs(plan); }
   if (state.tab === 'dashboard') { tb.innerHTML = renderDashboard(dashboard); }
+}
+
+function syncTabClasses() {
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.tab === state.tab);
+  });
 }
 
 // ── Items tab ─────────────────────────────────────────────────────────────────
