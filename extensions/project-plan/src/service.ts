@@ -20,6 +20,11 @@ type RunnerState = {
   stopRequested: boolean;
 };
 
+type TranscriptMessage = {
+  role?: string;
+  content?: unknown;
+};
+
 const runners = new Map<string, RunnerState>();
 
 /** Returns true when a plan execution loop is active. */
@@ -178,11 +183,30 @@ async function processItem(params: {
     const result = await api.runtime.subagent.waitForRun({ runId, timeoutMs });
 
     if (result.status === "ok") {
-      item.status = "done";
-      item.updatedAt = Date.now();
-      plan.logs.push(
-        createLog({ level: "info", message: `Completed: ${item.title}`, itemId: item.id }),
-      );
+      const transcript = await api.runtime.subagent.getSessionMessages({
+        sessionKey,
+        limit: 200,
+      });
+      const lastAssistantText = extractLastAssistantText(transcript.messages);
+      const completion = classifyCompletion(lastAssistantText);
+
+      if (completion.ok) {
+        item.status = "done";
+        item.updatedAt = Date.now();
+        plan.logs.push(
+          createLog({ level: "info", message: `Completed: ${item.title}`, itemId: item.id }),
+        );
+      } else {
+        item.status = "failed";
+        item.updatedAt = Date.now();
+        plan.logs.push(
+          createLog({
+            level: "error",
+            message: `Failed: ${item.title} (${completion.reason})`,
+            itemId: item.id,
+          }),
+        );
+      }
     } else {
       item.status = "failed";
       item.updatedAt = Date.now();
@@ -205,6 +229,61 @@ async function processItem(params: {
 
   recomputeContainerStatuses(plan);
   await savePlan(stateDir, plan, { maxLogEntries: maxLog });
+}
+
+function extractTextContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object" || Array.isArray(block)) {
+        return "";
+      }
+      const typedBlock = block as { type?: unknown; text?: unknown };
+      return typedBlock.type === "text" && typeof typedBlock.text === "string"
+        ? typedBlock.text
+        : "";
+    })
+    .join("")
+    .trim();
+}
+
+function extractLastAssistantText(messages: unknown[]): string {
+  const typed = messages as TranscriptMessage[];
+  for (let i = typed.length - 1; i >= 0; i -= 1) {
+    const msg = typed[i];
+    if (msg?.role !== "assistant") {
+      continue;
+    }
+    const text = extractTextContent(msg.content);
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
+function classifyCompletion(text: string): { ok: true } | { ok: false; reason: string } {
+  if (!text.trim()) {
+    return { ok: false, reason: "No assistant completion message" };
+  }
+
+  const failurePattern =
+    /\b(cannot|can't|could not|unable|failed|error|not found|permission denied|path escapes sandbox root|no such file|refuse|rejected)\b/i;
+  if (failurePattern.test(text)) {
+    return { ok: false, reason: "Agent response indicates the task could not be completed" };
+  }
+
+  const completionPattern = /\b(complete(?:d)?|finished|done|tamamlandi|tamamlandı|tamam)\b/i;
+  if (!completionPattern.test(text)) {
+    return { ok: false, reason: "Assistant did not confirm completion" };
+  }
+
+  return { ok: true };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

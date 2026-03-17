@@ -189,7 +189,12 @@ export default definePluginEntry({
           expiresAt: token.expiresAt,
         };
       },
-      resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
+      resolveUsageAuth: async (ctx) => {
+        const token = ctx.resolveApiKeyFromConfigAndStore({
+          envDirect: [ctx.env.COPILOT_GITHUB_TOKEN, ctx.env.GH_TOKEN, ctx.env.GITHUB_TOKEN],
+        });
+        return token ? { token } : null;
+      },
       fetchUsageSnapshot: async (ctx) =>
         await fetchCopilotUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
