@@ -261,6 +261,7 @@ const AI_AGENTS_SECTION_KEYS = [
   "memory",
   "session",
 ] as const;
+const AI_AGENTS_DEFAULT_SECTION: AiAgentsSectionKey = "models";
 type CommunicationSectionKey = (typeof COMMUNICATION_SECTION_KEYS)[number];
 type AppearanceSectionKey = (typeof APPEARANCE_SECTION_KEYS)[number];
 type AutomationSectionKey = (typeof AUTOMATION_SECTION_KEYS)[number];
@@ -1826,8 +1827,8 @@ export function renderApp(state: AppViewState) {
                   !AI_AGENTS_SECTION_KEYS.includes(
                     state.aiAgentsActiveSection as AiAgentsSectionKey,
                   )
-                    ? AI_AGENTS_SECTION_KEYS[0]
-                    : (state.aiAgentsActiveSection ?? AI_AGENTS_SECTION_KEYS[0]),
+                    ? AI_AGENTS_DEFAULT_SECTION
+                    : (state.aiAgentsActiveSection ?? AI_AGENTS_DEFAULT_SECTION),
                 activeSubsection:
                   state.aiAgentsActiveSection &&
                   AI_AGENTS_SECTION_KEYS.includes(
