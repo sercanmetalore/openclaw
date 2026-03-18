@@ -43,13 +43,18 @@ select option{background:var(--panel-2)}
 .plan-item .meta{font-size:11px;color:var(--muted-2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .running-dot{display:inline-block;width:7px;height:7px;background:#4ade80;border-radius:50%;margin-right:5px;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.content{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
+.content{flex:1;overflow:hidden;padding:20px;display:flex;flex-direction:column;gap:14px;min-height:0}
 .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:var(--empty);gap:8px}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px}
 .card-title{font-size:11px;font-weight:600;color:var(--muted-2);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px}
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:16px}
 .tab{padding:8px 14px;font-size:13px;color:var(--muted);border-bottom:2px solid transparent;cursor:pointer;user-select:none}
 .tab:hover{color:var(--text-soft)} .tab.active{color:#7c9ef8;border-bottom-color:#7c9ef8}
+.detail-shell{display:flex;flex-direction:column;flex:1;min-height:0}
+.detail-fixed{flex-shrink:0}
+.detail-fixed > *{margin-bottom:14px}
+.detail-fixed > *:last-child{margin-bottom:0}
+.tab-body{flex:1;min-height:0;overflow-y:auto;padding-right:2px}
 .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;text-transform:uppercase}
 .badge-todo{background:var(--panel-hover);color:var(--muted)}
 .badge-inprogress{background:#1a3a5c;color:#7cb9f8}
@@ -433,29 +438,33 @@ function renderContent() {
   const { plan, dashboard } = state.detail;
   const isLocal = plan.settings.source === 'local';
   c.innerHTML = \`
-    <div class="detail-header">
-      <span class="detail-title">\${plan.name}</span>
-      \${providerTag(plan.settings.source)}
-      \${badge(plan.status)}
+    <div class="detail-shell">
+      <div class="detail-fixed">
+        <div class="detail-header">
+          <span class="detail-title">\${plan.name}</span>
+          \${providerTag(plan.settings.source)}
+          \${badge(plan.status)}
+        </div>
+        \${plan.description ? \`<div style="color:#666;font-size:13px">\${plan.description}</div>\` : ''}
+        <div class="action-bar">
+          \${dashboard.running
+            ? '<button class="danger" id="btn-stop"><span class="spinner"></span>Stop</button>'
+            : '<button class="primary" id="btn-start">▶ Run</button>'
+          }
+          \${!dashboard.running ? '<button class="secondary" id="btn-retry">↺ Retry Failed</button>' : ''}
+          \${!isLocal ? '<button class="secondary" id="btn-sync">↻ Sync</button>' : ''}
+          \${isLocal  ? '<button class="secondary" id="btn-upload">↑ Import File</button>' : ''}
+          <button class="secondary" id="btn-add-item">＋ Add Item</button>
+          <button class="icon" id="btn-del-plan" title="Delete plan" style="margin-left:auto;color:#8b1a1a">🗑</button>
+        </div>
+        <div class="tabs">
+          \${['items','settings','logs','dashboard'].map(t =>
+            \`<div class="tab \${state.tab===t?'active':''}" data-tab="\${t}">\${t.charAt(0).toUpperCase()+t.slice(1)}</div>\`
+          ).join('')}
+        </div>
+      </div>
+      <div id="tab-body" class="tab-body"></div>
     </div>
-    \${plan.description ? \`<div style="color:#666;font-size:13px">\${plan.description}</div>\` : ''}
-    <div class="action-bar">
-      \${dashboard.running
-        ? '<button class="danger" id="btn-stop"><span class="spinner"></span>Stop</button>'
-        : '<button class="primary" id="btn-start">▶ Run</button>'
-      }
-      \${!dashboard.running ? '<button class="secondary" id="btn-retry">↺ Retry Failed</button>' : ''}
-      \${!isLocal ? '<button class="secondary" id="btn-sync">↻ Sync</button>' : ''}
-      \${isLocal  ? '<button class="secondary" id="btn-upload">↑ Import File</button>' : ''}
-      <button class="secondary" id="btn-add-item">＋ Add Item</button>
-      <button class="icon" id="btn-del-plan" title="Delete plan" style="margin-left:auto;color:#8b1a1a">🗑</button>
-    </div>
-    <div class="tabs">
-      \${['items','settings','logs','dashboard'].map(t =>
-        \`<div class="tab \${state.tab===t?'active':''}" data-tab="\${t}">\${t.charAt(0).toUpperCase()+t.slice(1)}</div>\`
-      ).join('')}
-    </div>
-    <div id="tab-body"></div>
   \`;
 
   c.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => { state.tab = t.dataset.tab; renderTab(); }));
