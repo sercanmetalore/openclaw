@@ -51,6 +51,7 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   return {
     run: unavailable,
     waitForRun: unavailable,
+    abortRun: unavailable,
     getSessionMessages: unavailable,
     getSession: unavailable,
     deleteSession: unavailable,

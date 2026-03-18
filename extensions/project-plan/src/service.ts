@@ -18,6 +18,11 @@ const DEFAULT_ITEM_TIMEOUT_MINUTES = 30;
 type RunnerState = {
   running: boolean;
   stopRequested: boolean;
+  activeRun?: {
+    runId: string;
+    sessionKey: string;
+  };
+  abortRequested?: boolean;
 };
 
 type TranscriptMessage = {
@@ -47,9 +52,15 @@ export function isRunning(planId: string): boolean {
 }
 
 /** Request graceful stop for a running plan. */
-export function requestStop(planId: string): void {
+export function requestStop(planId: string, api?: OpenClawPluginApi): void {
   const state = runners.get(planId);
-  if (state) state.stopRequested = true;
+  if (!state) {
+    return;
+  }
+  state.stopRequested = true;
+  if (api) {
+    requestActiveRunAbort({ api, planId, state });
+  }
 }
 
 /** Return a snapshot of all active runner IDs. */
@@ -155,6 +166,7 @@ async function runPlanLoop(params: {
         projectPath,
         stateDir,
         api,
+        runnerState: state,
         timeoutMs,
         maxLog,
       });
@@ -183,10 +195,11 @@ async function processItem(params: {
   projectPath: string;
   stateDir: string;
   api: OpenClawPluginApi;
+  runnerState: RunnerState;
   timeoutMs: number;
   maxLog?: number;
 }): Promise<void> {
-  const { plan, item, sessionKey, projectPath, stateDir, api, timeoutMs, maxLog } = params;
+  const { plan, item, sessionKey, projectPath, stateDir, api, runnerState, timeoutMs, maxLog } = params;
 
   item.status = "in progress";
   item.updatedAt = Date.now();
@@ -202,7 +215,32 @@ async function processItem(params: {
       message: buildItemMessage(plan, item, projectPath),
       extraSystemPrompt: buildSystemPrompt(projectPath),
     });
-    const result = await api.runtime.subagent.waitForRun({ runId, timeoutMs });
+    runnerState.activeRun = { runId, sessionKey };
+    runnerState.abortRequested = false;
+    if (runnerState.stopRequested) {
+      requestActiveRunAbort({ api, planId: plan.id, state: runnerState });
+    }
+
+    const result = await waitForRunWithStopPolling({
+      api,
+      runId,
+      planId: plan.id,
+      runnerState,
+      timeoutMs,
+    });
+
+    if (runnerState.stopRequested) {
+      item.status = "to do";
+      item.updatedAt = Date.now();
+      plan.logs.push(
+        createLog({
+          level: "warn",
+          message: `Stopped before completion: ${item.title}`,
+          itemId: item.id,
+        }),
+      );
+      return;
+    }
 
     if (result.status === "ok") {
       const transcript = await api.runtime.subagent.getSessionMessages({
@@ -247,10 +285,69 @@ async function processItem(params: {
       createLog({ level: "error", message: `Error: ${item.title}: ${String(err)}`, itemId: item.id }),
     );
     api.logger.error(`project-plan: item execution error planId=${plan.id} itemId=${item.id} error=${String(err)}`);
+  } finally {
+    runnerState.activeRun = undefined;
+    runnerState.abortRequested = false;
   }
 
   recomputeContainerStatuses(plan);
   await savePlan(stateDir, plan, { maxLogEntries: maxLog });
+}
+
+async function waitForRunWithStopPolling(params: {
+  api: OpenClawPluginApi;
+  runId: string;
+  planId: string;
+  runnerState: RunnerState;
+  timeoutMs: number;
+}): Promise<Awaited<ReturnType<OpenClawPluginApi["runtime"]["subagent"]["waitForRun"]>>> {
+  const { api, runId, planId, runnerState, timeoutMs } = params;
+  const start = Date.now();
+  let remainingMs = timeoutMs;
+
+  while (remainingMs > 0) {
+    if (runnerState.stopRequested) {
+      requestActiveRunAbort({ api, planId, state: runnerState });
+    }
+
+    const sliceMs = Math.min(remainingMs, 1500);
+    const result = await api.runtime.subagent.waitForRun({ runId, timeoutMs: sliceMs });
+    if (result.status !== "timeout") {
+      return result;
+    }
+
+    remainingMs = timeoutMs - (Date.now() - start);
+  }
+
+  return { status: "timeout" };
+}
+
+function requestActiveRunAbort(params: {
+  api: OpenClawPluginApi;
+  planId: string;
+  state: RunnerState;
+}): void {
+  const { api, planId, state } = params;
+  const activeRun = state.activeRun;
+  if (!activeRun || state.abortRequested) {
+    return;
+  }
+  state.abortRequested = true;
+
+  void api.runtime.subagent
+    .abortRun({ sessionKey: activeRun.sessionKey, runId: activeRun.runId })
+    .then((res) => {
+      if (res.aborted) {
+        api.logger.info(
+          `project-plan: aborted active run planId=${planId} runId=${activeRun.runId}`,
+        );
+      }
+    })
+    .catch((err: unknown) => {
+      api.logger.warn(
+        `project-plan: abort request failed planId=${planId} runId=${activeRun.runId} error=${String(err)}`,
+      );
+    });
 }
 
 function extractTextContent(content: unknown): string {
@@ -385,7 +482,7 @@ export function createProjectPlanService(api: OpenClawPluginApi): OpenClawPlugin
     stop: async (_ctx) => {
       for (const [planId, state] of runners.entries()) {
         if (state.running) {
-          state.stopRequested = true;
+          requestStop(planId, api);
           api.logger.info(`project-plan: stop requested on shutdown planId=${planId}`);
         }
       }

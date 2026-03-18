@@ -147,6 +147,13 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         ...(typeof payload?.error === "string" && payload.error && { error: payload.error }),
       };
     },
+    async abortRun(params) {
+      const payload = await dispatchGatewayMethod<{ aborted?: boolean }>("chat.abort", {
+        sessionKey: params.sessionKey,
+        ...(params.runId && { runId: params.runId }),
+      });
+      return { aborted: payload?.aborted !== false };
+    },
     getSessionMessages,
     async getSession(params) {
       return getSessionMessages(params);
