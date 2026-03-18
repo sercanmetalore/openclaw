@@ -30,6 +30,10 @@ type TranscriptMessage = {
   content?: unknown;
 };
 
+type CompletionResult =
+  | { ok: true; missingAssistantSummary?: boolean }
+  | { ok: false; reason: string };
+
 function buildSessionKey(params: {
   plan: ProjectPlanRecord;
   item: ProjectPlanItem;
@@ -243,19 +247,31 @@ async function processItem(params: {
     }
 
     if (result.status === "ok") {
-      const transcript = await api.runtime.subagent.getSessionMessages({
+      const lastAssistantText = await getLastAssistantTextWithRetry({
+        api,
         sessionKey,
-        limit: 200,
+        attempts: 4,
+        delayMs: 200,
       });
-      const lastAssistantText = extractLastAssistantText(transcript.messages);
       const completion = classifyCompletion(lastAssistantText);
 
       if (completion.ok) {
         item.status = "done";
         item.updatedAt = Date.now();
-        plan.logs.push(
-          createLog({ level: "info", message: `Completed: ${item.title}`, itemId: item.id }),
-        );
+        if (completion.missingAssistantSummary) {
+          plan.logs.push(
+            createLog({
+              level: "warn",
+              message:
+                `Completed: ${item.title} (run finished but no assistant completion message was recorded)`,
+              itemId: item.id,
+            }),
+          );
+        } else {
+          plan.logs.push(
+            createLog({ level: "info", message: `Completed: ${item.title}`, itemId: item.id }),
+          );
+        }
       } else {
         item.status = "failed";
         item.updatedAt = Date.now();
@@ -386,20 +402,38 @@ function extractLastAssistantText(messages: unknown[]): string {
   return "";
 }
 
-function classifyCompletion(text: string): { ok: true } | { ok: false; reason: string } {
+async function getLastAssistantTextWithRetry(params: {
+  api: OpenClawPluginApi;
+  sessionKey: string;
+  attempts: number;
+  delayMs: number;
+}): Promise<string> {
+  const { api, sessionKey, attempts, delayMs } = params;
+  for (let i = 0; i < attempts; i += 1) {
+    const transcript = await api.runtime.subagent.getSessionMessages({
+      sessionKey,
+      limit: 200,
+    });
+    const text = extractLastAssistantText(transcript.messages);
+    if (text) {
+      return text;
+    }
+    if (i < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return "";
+}
+
+export function classifyCompletion(text: string): CompletionResult {
   if (!text.trim()) {
-    return { ok: false, reason: "No assistant completion message" };
+    return { ok: true, missingAssistantSummary: true };
   }
 
   const failurePattern =
     /\b(cannot|can't|could not|unable|failed|error|not found|permission denied|path escapes sandbox root|no such file|refuse|rejected)\b/i;
   if (failurePattern.test(text)) {
     return { ok: false, reason: "Agent response indicates the task could not be completed" };
-  }
-
-  const completionPattern = /\b(complete(?:d)?|finished|done|tamamlandi|tamamlandı|tamam)\b/i;
-  if (!completionPattern.test(text)) {
-    return { ok: false, reason: "Assistant did not confirm completion" };
   }
 
   return { ok: true };
