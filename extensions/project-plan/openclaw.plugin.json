@@ -21,12 +21,12 @@
   "uiHints": {
     "maxLogEntries": {
       "label": "Max Log Entries Per Plan",
-      "help": "Maximum number of log entries to keep per project plan (default: 500).",
+      "help": "Maximum number of log entries to keep per project plan (default: 800).",
       "advanced": true
     },
     "itemTimeoutMinutes": {
       "label": "Item Timeout (minutes)",
-      "help": "Maximum time the agent is allowed per plan item before it is marked as failed (default: 30).",
+      "help": "Maximum time the agent is allowed per plan item before it is marked as failed (default: 60).",
       "advanced": true
     }
   }
