@@ -113,21 +113,10 @@ function hasCancelledAncestor(item: ProjectPlanItem, index: ItemIndex): boolean 
 
 export function findNextExecutableItem(plan: ProjectPlanRecord): ProjectPlanItem | undefined {
   const index = buildItemIndex(plan.items);
-  const priorityByStatus: Record<ProjectPlanStatus, number> = {
-    failed: 0,
-    "in progress": 1,
-    "to do": 2,
-    blocked: 3,
-    done: 4,
-    cancelled: 5,
-  };
   return [...plan.items]
-    .sort((a, b) => {
-      const priorityDiff = priorityByStatus[a.status] - priorityByStatus[b.status];
-      return priorityDiff || a.order - b.order;
-    })
+    .sort((a, b) => a.order - b.order)
     .find((item) =>
-      (item.status === "failed" || item.status === "in progress" || item.status === "to do")
+      item.status === "to do"
       && isExecutableItem(item, index)
       && !hasCancelledAncestor(item, index),
     );

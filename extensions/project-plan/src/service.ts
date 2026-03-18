@@ -25,6 +25,20 @@ type TranscriptMessage = {
   content?: unknown;
 };
 
+function buildSessionKey(params: {
+  plan: ProjectPlanRecord;
+  item: ProjectPlanItem;
+  runSessionId: string;
+}): string {
+  const { plan, item, runSessionId } = params;
+  const agentId = plan.settings.defaultAgentId ?? "main";
+  const baseSessionKey = `agent:${agentId}:project-plan-${plan.id}`;
+  if (plan.settings.itemScopedSessions === false) {
+    return baseSessionKey;
+  }
+  return `${baseSessionKey}:run-${runSessionId}:item-${item.id}`;
+}
+
 const runners = new Map<string, RunnerState>();
 
 /** Returns true when a plan execution loop is active. */
@@ -100,8 +114,7 @@ async function runPlanLoop(params: {
   plan.logs.push(createLog({ level: "info", message: `Plan execution started. Working in: ${projectPath}` }));
   await savePlan(stateDir, plan, { maxLogEntries: maxLog });
 
-  const agentId = plan.settings.defaultAgentId ?? "main";
-  const sessionKey = `agent:${agentId}:project-plan-${planId}`;
+  const runSessionId = crypto.randomUUID();
 
   try {
     while (!state.stopRequested) {
@@ -135,7 +148,16 @@ async function runPlanLoop(params: {
         break;
       }
 
-      await processItem({ plan, item: nextItem, sessionKey, projectPath, stateDir, api, timeoutMs, maxLog });
+      await processItem({
+        plan,
+        item: nextItem,
+        sessionKey: buildSessionKey({ plan, item: nextItem, runSessionId }),
+        projectPath,
+        stateDir,
+        api,
+        timeoutMs,
+        maxLog,
+      });
     }
   } finally {
     runners.delete(planId);

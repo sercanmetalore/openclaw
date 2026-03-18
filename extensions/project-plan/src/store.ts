@@ -128,6 +128,7 @@ export function createPlan(params: {
       source: params.source ?? "local",
       defaultAgentId: "main",
       syncMode: "manual",
+      itemScopedSessions: true,
     },
     execution: { running: false },
     metrics: { runCount: 0, tokenSpent: 0, durationMs: 0 },

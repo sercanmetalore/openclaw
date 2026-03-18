@@ -69,7 +69,7 @@ describe("project-plan execution helpers", () => {
     expect(hasOutstandingExecutableItems(plan)).toBe(false);
   });
 
-  it("prioritizes failed items before in-progress and todo on restart", () => {
+  it("selects earliest to-do item and skips failed/in-progress items", () => {
     const plan = createPlan({ name: "Resume" });
     const earlyFailed = createItem({ title: "Early failed", type: "task", order: 0 });
     const resumed = createItem({ title: "Resume me", type: "task", order: 1 });
@@ -79,10 +79,10 @@ describe("project-plan execution helpers", () => {
     laterTodo.status = "to do";
     plan.items = [earlyFailed, resumed, laterTodo];
 
-    expect(findNextExecutableItem(plan)?.id).toBe(earlyFailed.id);
+    expect(findNextExecutableItem(plan)?.id).toBe(laterTodo.id);
   });
 
-  it("keeps failed item priority even when another item is in progress", () => {
+  it("returns undefined when no executable item is in to-do state", () => {
     const plan = createPlan({ name: "Retry" });
     const retried = createItem({ title: "Retried", type: "task", order: 0 });
     const current = createItem({ title: "Current", type: "task", order: 1 });
@@ -90,6 +90,6 @@ describe("project-plan execution helpers", () => {
     current.status = "in progress";
     plan.items = [retried, current];
 
-    expect(findNextExecutableItem(plan)?.id).toBe(retried.id);
+    expect(findNextExecutableItem(plan)).toBeUndefined();
   });
 });

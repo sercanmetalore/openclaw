@@ -23,6 +23,8 @@ export type ProjectPlanSettings = {
   providerPlanId?: string;
   defaultAgentId?: string;
   syncMode?: "manual" | "pull";
+  /** Use a separate subagent session for each plan item to avoid context buildup. */
+  itemScopedSessions?: boolean;
   /** Absolute path on the local filesystem where agents are allowed to make changes. */
   projectPath?: string;
   /** ID of the PlanAccount to use for cloud sync operations. */

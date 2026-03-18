@@ -20,6 +20,7 @@ button:disabled{opacity:.4;cursor:default}
 input,select,textarea{background:#1e1e24;color:#e2e2e5;border:1px solid #3a3a42;border-radius:6px;padding:7px 10px;font-size:13px;width:100%;outline:none}
 input:focus,select:focus,textarea:focus{border-color:#5a7ef8}
 input[type=file]{padding:6px}
+input[type=checkbox]{width:auto;padding:0;border-radius:4px}
 input[type=password]{letter-spacing:.1em}
 textarea{resize:vertical;min-height:80px}
 label{display:block;font-size:12px;color:#888;margin-bottom:4px}
@@ -587,6 +588,15 @@ function renderSettings(plan) {
     <div class="field"><label>Default Agent ID</label>
       <select id="s-agent">\${agentOptions}</select>
     </div>
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:8px;color:#c8c8d0;margin-bottom:6px">
+        <input id="s-item-sessions" type="checkbox" \${s.itemScopedSessions===false?'':'checked'}/>
+        Use separate AI session per plan item
+      </label>
+      <div style="font-size:11px;color:#666;line-height:1.4">
+        Recommended for long plans to prevent context-window overflows.
+      </div>
+    </div>
     <button class="primary" id="btn-save-settings">Save Settings</button>
   </div>\`;
 }
@@ -642,6 +652,7 @@ function bindSettings(plan) {
       accountId,
       projectPath: el('s-proj-path')?.value || undefined,
       defaultAgentId: el('s-agent')?.value || 'main',
+      itemScopedSessions: el('s-item-sessions')?.checked ?? true,
       providerProjectId: el('s-proj-id')?.value || undefined,
       providerPlanId: el('s-plan-id')?.value || undefined,
       syncMode: plan.settings.syncMode || 'manual',
