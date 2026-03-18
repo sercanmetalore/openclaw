@@ -14,6 +14,11 @@ export type CompactionSafeguardRuntimeValue = {
    * (extensionRunner.initialize() is never called in that path).
    */
   model?: Model<Api>;
+  /**
+   * Runtime-prepared credential to use for compaction summarization.
+   * This avoids re-resolving raw credentials in extension hooks.
+   */
+  apiKey?: string;
   recentTurnsPreserve?: number;
   qualityGuardEnabled?: boolean;
   qualityGuardMaxRetries?: number;

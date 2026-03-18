@@ -288,14 +288,13 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const originalOnPayload = options?.onPayload;
+    const shouldApplyCompatRewrite =
+      !isAnthropicOAuthApiKey(options?.apiKey) &&
+      requiresAnthropicToolPayloadCompatibilityForModel(model);
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
-        if (
-          payload &&
-          typeof payload === "object" &&
-          requiresAnthropicToolPayloadCompatibilityForModel(model)
-        ) {
+        if (payload && typeof payload === "object" && shouldApplyCompatRewrite) {
           const payloadObj = payload as Record<string, unknown>;
           if (
             Array.isArray(payloadObj.tools) &&

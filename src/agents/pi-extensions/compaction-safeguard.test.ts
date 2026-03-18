@@ -1480,6 +1480,29 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(retrieved?.model).toEqual(model);
   });
 
+  it("prefers runtime apiKey when available", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      apiKey: "runtime-key",
+    });
+
+    const mockEvent = createCompactionEvent({
+      messageText: "use runtime credential",
+      tokensBefore: 1000,
+    });
+    const { result, getApiKeyMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
   it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {
     const sessionManager = stubSessionManager();
 

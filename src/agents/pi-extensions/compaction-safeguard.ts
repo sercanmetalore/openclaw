@@ -743,7 +743,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const apiKey = await ctx.modelRegistry.getApiKey(model);
+    const apiKey = runtime?.apiKey?.trim() || (await ctx.modelRegistry.getApiKey(model));
     if (!apiKey) {
       log.warn(
         "Compaction safeguard: no API key available; cancelling compaction to preserve history.",

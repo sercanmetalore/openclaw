@@ -67,6 +67,7 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: Model<Api> | undefined;
+  apiKey?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
@@ -88,6 +89,7 @@ export function buildEmbeddedExtensionFactories(params: {
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? false,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
+      apiKey: params.apiKey,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
     });
     factories.push(compactionSafeguardExtension);

@@ -1047,6 +1047,54 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
+  it("keeps native anthropic tool schema for OAuth tokens even with compat metadata", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "custom-anthropic-proxy",
+      "proxy-model",
+      undefined,
+      "low",
+    );
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "custom-anthropic-proxy",
+      id: "proxy-model",
+      compat: {
+        requiresOpenAiAnthropicToolPayload: true,
+      },
+    } as unknown as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { apiKey: "sk-ant-oat-test-token" });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.tools).toEqual([
+      {
+        name: "read",
+        description: "Read file",
+        input_schema: { type: "object", properties: {} },
+      },
+    ]);
+  });
+
   it("removes invalid negative Google thinkingBudget and maps Gemini 3.1 to thinkingLevel", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {

@@ -34,7 +34,11 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
+import {
+  resolveRunModelFallbacksOverride,
+  resolveSessionAgentId,
+  resolveSessionAgentIds,
+} from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
@@ -51,6 +55,7 @@ import {
 } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { runWithModelFallback } from "../model-fallback.js";
 import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
@@ -150,7 +155,56 @@ export type CompactEmbeddedPiSessionParams = {
   abortSignal?: AbortSignal;
   /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
+  /**
+   * Internal guard to avoid recursively nesting model fallback orchestration.
+   */
+  disableModelFallback?: boolean;
+  /**
+   * Internal guard to bypass agents.defaults.compaction.model override for fallback attempts.
+   */
+  skipCompactionModelOverride?: boolean;
 };
+
+type ResolvedCompactionTarget = {
+  provider: string;
+  modelId: string;
+  authProfileId?: string;
+};
+
+function resolveCompactionTarget(
+  params: CompactEmbeddedPiSessionParams,
+  options?: { skipCompactionModelOverride?: boolean },
+): ResolvedCompactionTarget {
+  const useCompactionOverride = !options?.skipCompactionModelOverride;
+  const compactionModelOverride = useCompactionOverride
+    ? params.config?.agents?.defaults?.compaction?.model?.trim()
+    : undefined;
+
+  let provider: string;
+  let modelId: string;
+  // When switching provider, drop primary auth profile to avoid sending
+  // mismatched credentials to a different provider.
+  let authProfileId: string | undefined = params.authProfileId;
+
+  if (compactionModelOverride) {
+    const slashIdx = compactionModelOverride.indexOf("/");
+    if (slashIdx > 0) {
+      provider = compactionModelOverride.slice(0, slashIdx).trim();
+      modelId = compactionModelOverride.slice(slashIdx + 1).trim() || DEFAULT_MODEL;
+      if (provider !== (params.provider ?? "").trim()) {
+        authProfileId = undefined;
+      }
+    } else {
+      provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      modelId = compactionModelOverride;
+    }
+  } else {
+    provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+    modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  }
+
+  return { provider, modelId, authProfileId };
+}
 
 type CompactionMessageMetrics = {
   messages: number;
@@ -391,31 +445,12 @@ export async function compactEmbeddedPiSessionDirect(
   });
   const prevCwd = process.cwd();
 
-  // Resolve compaction model: prefer config override, then fall back to caller-supplied model
-  const compactionModelOverride = params.config?.agents?.defaults?.compaction?.model?.trim();
-  let provider: string;
-  let modelId: string;
-  // When switching provider via override, drop the primary auth profile to avoid
-  // sending the wrong credentials (e.g. OpenAI profile token to OpenRouter).
-  let authProfileId: string | undefined = params.authProfileId;
-  if (compactionModelOverride) {
-    const slashIdx = compactionModelOverride.indexOf("/");
-    if (slashIdx > 0) {
-      provider = compactionModelOverride.slice(0, slashIdx).trim();
-      modelId = compactionModelOverride.slice(slashIdx + 1).trim() || DEFAULT_MODEL;
-      // Provider changed — drop primary auth profile so getApiKeyForModel
-      // falls back to provider-based key resolution for the override model.
-      if (provider !== (params.provider ?? "").trim()) {
-        authProfileId = undefined;
-      }
-    } else {
-      provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      modelId = compactionModelOverride;
-    }
-  } else {
-    provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-    modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-  }
+  const primaryTarget = resolveCompactionTarget(params, {
+    skipCompactionModelOverride: params.skipCompactionModelOverride,
+  });
+  let provider = primaryTarget.provider;
+  let modelId = primaryTarget.modelId;
+  let authProfileId = primaryTarget.authProfileId;
   const fail = (reason: string): EmbeddedPiCompactResult => {
     log.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
@@ -430,6 +465,46 @@ export async function compactEmbeddedPiSessionDirect(
     };
   };
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+
+  if (!params.disableModelFallback && trigger === "overflow") {
+    const fallbackResult = await runWithModelFallback({
+      cfg: params.config,
+      provider,
+      model: modelId,
+      runId,
+      agentDir,
+      fallbacksOverride: resolveRunModelFallbacksOverride({
+        cfg: params.config,
+        agentId: resolveSessionAgentId({
+          sessionKey: params.sessionKey,
+          config: params.config,
+        }),
+        sessionKey: params.sessionKey,
+      }),
+      run: async (candidateProvider, candidateModel) => {
+        const candidateResult = await compactEmbeddedPiSessionDirect({
+          ...params,
+          provider: candidateProvider,
+          model: candidateModel,
+          authProfileId:
+            candidateProvider === ((params.provider ?? "").trim() || DEFAULT_PROVIDER)
+              ? params.authProfileId
+              : undefined,
+          disableModelFallback: true,
+          skipCompactionModelOverride: true,
+        });
+        if (!candidateResult.ok) {
+          throw new Error(
+            candidateResult.reason ??
+              `Compaction failed for ${candidateProvider}/${candidateModel}`,
+          );
+        }
+        return candidateResult;
+      },
+    });
+    return fallbackResult.result;
+  }
+
   await ensureOpenClawModelsJson(params.config, agentDir);
   const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
     provider,
@@ -766,6 +841,7 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
         model,
+        apiKey: await authStorage.getApiKey(runtimeModel.provider),
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
