@@ -264,6 +264,33 @@ export function createHttpHandler(params: {
           return ok(res), true;
         }
 
+        // POST /api/plans/:id/retry
+        if (method === "POST" && sub === "/retry") {
+          const plan = await loadPlan(stateDir, planId);
+          if (!plan) return err(res, 404, "Plan not found"), true;
+          if (isRunning(planId)) return err(res, 409, "Already running"), true;
+
+          const now = Date.now();
+          let resetCount = 0;
+          for (const item of plan.items) {
+            if (item.status === "failed" || item.status === "in progress" || item.status === "blocked") {
+              item.status = "to do";
+              item.updatedAt = now;
+              resetCount += 1;
+            }
+          }
+          recomputeContainerStatuses(plan);
+          plan.status = "to do";
+          plan.execution.running = false;
+          plan.execution.currentItemId = undefined;
+          plan.logs.push(createLog({
+            level: "warn",
+            message: `Retry reset: moved ${resetCount} items from failed/in progress/blocked to to do.`,
+          }));
+          await savePlan(stateDir, plan, opts);
+          return ok(res, { ok: true, resetCount }), true;
+        }
+
         // POST /api/plans/:id/stop
         if (method === "POST" && sub === "/stop") {
           requestStop(planId);

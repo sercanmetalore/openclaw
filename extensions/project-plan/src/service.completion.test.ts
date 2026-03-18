@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import { classifyCompletion } from "./service.js";
 
 describe("project-plan completion classification", () => {
-  it("treats empty assistant message as soft success", () => {
-    expect(classifyCompletion("")).toEqual({ ok: true, missingAssistantSummary: true });
+  it("fails when assistant message is missing", () => {
+    expect(classifyCompletion("")).toEqual({
+      ok: false,
+      reason: "No assistant completion message",
+    });
   });
 
   it("fails when assistant message clearly indicates failure", () => {

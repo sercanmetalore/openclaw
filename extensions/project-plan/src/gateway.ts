@@ -178,6 +178,49 @@ export function registerGatewayMethods(
     }
   });
 
+  // ── retry ─────────────────────────────────────────────────────────────────
+  api.registerGatewayMethod("plugin.plan.retry", async (req) => {
+    try {
+      const dir = await stateDir();
+      const planId = req.params.planId as string;
+      const plan = await loadPlan(dir, planId);
+      if (!plan) {
+        req.respond(false, undefined, { message: "Plan not found" });
+        return;
+      }
+      if (isRunning(planId)) {
+        req.respond(false, undefined, { message: "Plan is already running" });
+        return;
+      }
+
+      const now = Date.now();
+      let resetCount = 0;
+      for (const item of plan.items) {
+        if (item.status === "failed" || item.status === "in progress" || item.status === "blocked") {
+          item.status = "to do";
+          item.updatedAt = now;
+          resetCount += 1;
+        }
+      }
+
+      recomputeContainerStatuses(plan);
+      plan.status = "to do";
+      plan.execution.running = false;
+      plan.execution.currentItemId = undefined;
+      plan.logs.push(
+        createLog({
+          level: "warn",
+          message: `Retry reset: moved ${resetCount} items from failed/in progress/blocked to to do.`,
+        }),
+      );
+      await savePlan(dir, plan, opts);
+
+      req.respond(true, { ok: true, resetCount });
+    } catch (err) {
+      req.respond(false, undefined, { message: String(err) });
+    }
+  });
+
   // ── stop ──────────────────────────────────────────────────────────────────
   api.registerGatewayMethod("plugin.plan.stop", (req) => {
     requestStop(req.params.planId as string);

@@ -31,7 +31,7 @@ type TranscriptMessage = {
 };
 
 type CompletionResult =
-  | { ok: true; missingAssistantSummary?: boolean }
+  | { ok: true }
   | { ok: false; reason: string };
 
 function buildSessionKey(params: {
@@ -250,28 +250,17 @@ async function processItem(params: {
       const lastAssistantText = await getLastAssistantTextWithRetry({
         api,
         sessionKey,
-        attempts: 4,
-        delayMs: 200,
+        attempts: 12,
+        delayMs: 500,
       });
       const completion = classifyCompletion(lastAssistantText);
 
       if (completion.ok) {
         item.status = "done";
         item.updatedAt = Date.now();
-        if (completion.missingAssistantSummary) {
-          plan.logs.push(
-            createLog({
-              level: "warn",
-              message:
-                `Completed: ${item.title} (run finished but no assistant completion message was recorded)`,
-              itemId: item.id,
-            }),
-          );
-        } else {
-          plan.logs.push(
-            createLog({ level: "info", message: `Completed: ${item.title}`, itemId: item.id }),
-          );
-        }
+        plan.logs.push(
+          createLog({ level: "info", message: `Completed: ${item.title}`, itemId: item.id }),
+        );
       } else {
         item.status = "failed";
         item.updatedAt = Date.now();
@@ -427,7 +416,7 @@ async function getLastAssistantTextWithRetry(params: {
 
 export function classifyCompletion(text: string): CompletionResult {
   if (!text.trim()) {
-    return { ok: true, missingAssistantSummary: true };
+    return { ok: false, reason: "No assistant completion message" };
   }
 
   const failurePattern =
