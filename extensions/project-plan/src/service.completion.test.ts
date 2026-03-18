@@ -19,4 +19,11 @@ describe("project-plan completion classification", () => {
   it("treats non-failure assistant text as success", () => {
     expect(classifyCompletion("I updated the files and pushed the change.")).toEqual({ ok: true });
   });
+
+  it("surfaces assistant runtime errors when completion message is missing", () => {
+    expect(classifyCompletion("", { assistantErrorMessage: "Failed to extract accountId from token" })).toEqual({
+      ok: false,
+      reason: "Agent run error: Failed to extract accountId from token",
+    });
+  });
 });

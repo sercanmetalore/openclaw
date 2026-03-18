@@ -28,11 +28,19 @@ type RunnerState = {
 type TranscriptMessage = {
   role?: string;
   content?: unknown;
+  stopReason?: string;
+  errorMessage?: unknown;
+  error?: unknown;
 };
 
 type CompletionResult =
   | { ok: true }
   | { ok: false; reason: string };
+
+type AssistantOutcome = {
+  text: string;
+  errorMessage?: string;
+};
 
 function buildSessionKey(params: {
   plan: ProjectPlanRecord;
@@ -247,13 +255,15 @@ async function processItem(params: {
     }
 
     if (result.status === "ok") {
-      const lastAssistantText = await getLastAssistantTextWithRetry({
+      const assistantOutcome = await getLastAssistantOutcomeWithRetry({
         api,
         sessionKey,
         attempts: 12,
         delayMs: 500,
       });
-      const completion = classifyCompletion(lastAssistantText);
+      const completion = classifyCompletion(assistantOutcome.text, {
+        assistantErrorMessage: assistantOutcome.errorMessage,
+      });
 
       if (completion.ok) {
         item.status = "done";
@@ -376,46 +386,83 @@ function extractTextContent(content: unknown): string {
     .trim();
 }
 
-function extractLastAssistantText(messages: unknown[]): string {
+function extractAssistantErrorMessage(message: TranscriptMessage): string {
+  if (typeof message.errorMessage === "string" && message.errorMessage.trim()) {
+    return message.errorMessage.trim();
+  }
+
+  const directError = message.error;
+  if (typeof directError === "string" && directError.trim()) {
+    return directError.trim();
+  }
+
+  if (directError && typeof directError === "object" && !Array.isArray(directError)) {
+    const errorObj = directError as { message?: unknown };
+    if (typeof errorObj.message === "string" && errorObj.message.trim()) {
+      return errorObj.message.trim();
+    }
+  }
+
+  return "";
+}
+
+function extractLastAssistantOutcome(messages: unknown[]): AssistantOutcome {
   const typed = messages as TranscriptMessage[];
   for (let i = typed.length - 1; i >= 0; i -= 1) {
     const msg = typed[i];
     if (msg?.role !== "assistant") {
       continue;
     }
+
     const text = extractTextContent(msg.content);
     if (text) {
-      return text;
+      return { text };
+    }
+
+    const errorMessage = extractAssistantErrorMessage(msg);
+    if (errorMessage || msg.stopReason === "error") {
+      return {
+        text: "",
+        errorMessage: errorMessage || "Assistant run ended with an error",
+      };
     }
   }
-  return "";
+
+  return { text: "" };
 }
 
-async function getLastAssistantTextWithRetry(params: {
+async function getLastAssistantOutcomeWithRetry(params: {
   api: OpenClawPluginApi;
   sessionKey: string;
   attempts: number;
   delayMs: number;
-}): Promise<string> {
+}): Promise<AssistantOutcome> {
   const { api, sessionKey, attempts, delayMs } = params;
   for (let i = 0; i < attempts; i += 1) {
     const transcript = await api.runtime.subagent.getSessionMessages({
       sessionKey,
       limit: 200,
     });
-    const text = extractLastAssistantText(transcript.messages);
-    if (text) {
-      return text;
+    const outcome = extractLastAssistantOutcome(transcript.messages);
+    if (outcome.text || outcome.errorMessage) {
+      return outcome;
     }
     if (i < attempts - 1) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
-  return "";
+  return { text: "" };
 }
 
-export function classifyCompletion(text: string): CompletionResult {
+export function classifyCompletion(
+  text: string,
+  options?: { assistantErrorMessage?: string },
+): CompletionResult {
   if (!text.trim()) {
+    const assistantErrorMessage = options?.assistantErrorMessage?.trim();
+    if (assistantErrorMessage) {
+      return { ok: false, reason: `Agent run error: ${assistantErrorMessage}` };
+    }
     return { ok: false, reason: "No assistant completion message" };
   }
 

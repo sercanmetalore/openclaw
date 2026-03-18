@@ -444,7 +444,7 @@ function renderContent() {
         ? '<button class="danger" id="btn-stop"><span class="spinner"></span>Stop</button>'
         : '<button class="primary" id="btn-start">▶ Run</button>'
       }
-      ${!dashboard.running ? '<button class="secondary" id="btn-retry">↺ Retry Failed</button>' : ''}
+      \${!dashboard.running ? '<button class="secondary" id="btn-retry">↺ Retry Failed</button>' : ''}
       \${!isLocal ? '<button class="secondary" id="btn-sync">↻ Sync</button>' : ''}
       \${isLocal  ? '<button class="secondary" id="btn-upload">↑ Import File</button>' : ''}
       <button class="secondary" id="btn-add-item">＋ Add Item</button>
