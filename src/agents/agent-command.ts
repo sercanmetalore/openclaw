@@ -32,11 +32,13 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
 import {
+  loadSessionStore,
   mergeSessionEntry,
   resolveAgentIdFromSessionKey,
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
+import { callGateway } from "../gateway/call.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import {
   clearAgentRunContext,
@@ -45,7 +47,7 @@ import {
 } from "../infra/agent-events.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { isSubagentSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
@@ -87,6 +89,8 @@ import {
   resolveThinkingDefault,
 } from "./model-selection.js";
 import { prepareSessionManagerForRun } from "./pi-embedded-runner/session-manager-init.js";
+import type { EmbeddedPiRunResult } from "./pi-embedded-runner/types.js";
+import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "./pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "./skills.js";
 import { getSkillsSnapshotVersion } from "./skills/refresh.js";
@@ -137,6 +141,67 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
     return merged;
   });
   params.sessionStore[params.sessionKey] = persisted;
+}
+
+export function resolveSubagentFallbackOwnerAgentId(params: {
+  sessionAgentId: string;
+  sessionKey?: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  spawnedByOverride?: string;
+}): string {
+  const normalizedSessionKey = params.sessionKey?.trim();
+  if (!normalizedSessionKey || !isSubagentSessionKey(normalizedSessionKey)) {
+    return params.sessionAgentId;
+  }
+
+  let parentKey = params.spawnedByOverride?.trim() || params.sessionEntry?.spawnedBy?.trim() || "";
+  if (!parentKey) {
+    return params.sessionAgentId;
+  }
+
+  let fallbackOwnerAgentId = params.sessionAgentId;
+  const visited = new Set<string>();
+  while (parentKey && !visited.has(parentKey)) {
+    visited.add(parentKey);
+    fallbackOwnerAgentId = resolveAgentIdFromSessionKey(parentKey);
+    if (!isSubagentSessionKey(parentKey)) {
+      break;
+    }
+    const parentEntry = params.sessionStore?.[parentKey];
+    const nextParent = parentEntry?.spawnedBy?.trim();
+    if (!nextParent) {
+      break;
+    }
+    parentKey = nextParent;
+  }
+
+  return fallbackOwnerAgentId;
+}
+
+async function resetSubagentSessionAfterContextOverflow(params: {
+  sessionKey: string;
+  storePath?: string;
+  sessionStore?: Record<string, SessionEntry>;
+}): Promise<SessionEntry | undefined> {
+  await callGateway({
+    method: "sessions.reset",
+    params: { key: params.sessionKey },
+    timeoutMs: 20_000,
+  });
+
+  if (!params.storePath) {
+    return params.sessionStore?.[params.sessionKey];
+  }
+
+  const refreshedStore = loadSessionStore(params.storePath, { skipCache: true });
+  if (params.sessionStore) {
+    for (const key of Object.keys(params.sessionStore)) {
+      delete params.sessionStore[key];
+    }
+    Object.assign(params.sessionStore, refreshedStore);
+  }
+  return refreshedStore[params.sessionKey];
 }
 
 function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boolean }): string {
@@ -690,7 +755,7 @@ async function agentCommandInternal(
     thinkOnce,
     verboseOverride,
     timeoutMs,
-    sessionId,
+    sessionId: initialSessionId,
     sessionKey,
     sessionStore,
     storePath,
@@ -706,6 +771,7 @@ async function agentCommandInternal(
     acpResolution,
   } = prepared;
   let sessionEntry = prepared.sessionEntry;
+  let sessionId = initialSessionId;
 
   try {
     if (opts.deliver === true) {
@@ -1050,7 +1116,7 @@ async function agentCommandInternal(
         });
       }
     }
-    let sessionFile: string | undefined;
+    let sessionFile = "";
     if (sessionStore && sessionKey) {
       const resolvedSessionFile = await resolveSessionTranscriptFile({
         sessionId,
@@ -1075,6 +1141,9 @@ async function agentCommandInternal(
       sessionFile = resolvedSessionFile.sessionFile;
       sessionEntry = resolvedSessionFile.sessionEntry;
     }
+    if (!sessionFile) {
+      throw new Error("Failed to resolve session transcript file.");
+    }
 
     const startedAt = Date.now();
     let lifecycleEnded = false;
@@ -1091,67 +1160,130 @@ async function agentCommandInternal(
       const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
       // Keep fallback candidate resolution centralized so session model overrides,
       // per-agent overrides, and default fallbacks stay consistent across callers.
+      const fallbackOwnerAgentId = resolveSubagentFallbackOwnerAgentId({
+        sessionAgentId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        spawnedByOverride: normalizedSpawned.spawnedBy,
+      });
       const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
         cfg,
-        agentId: sessionAgentId,
+        agentId: fallbackOwnerAgentId,
         hasSessionModelOverride: Boolean(storedModelOverride),
       });
 
       // Track model fallback attempts so retries on an existing session don't
       // re-inject the original prompt as a duplicate user message.
       let fallbackAttemptIndex = 0;
-      const fallbackResult = await runWithModelFallback({
-        cfg,
-        provider,
-        model,
-        runId,
-        agentDir,
-        fallbacksOverride: effectiveFallbacksOverride,
-        run: (providerOverride, modelOverride, runOptions) => {
-          const isFallbackRetry = fallbackAttemptIndex > 0;
-          fallbackAttemptIndex += 1;
-          return runAgentAttempt({
-            providerOverride,
-            modelOverride,
+      let hasRetriedWithFreshSubagentSession = false;
+      while (true) {
+        try {
+          const fallbackResult = await runWithModelFallback<EmbeddedPiRunResult>({
             cfg,
-            sessionEntry,
-            sessionId,
-            sessionKey,
-            sessionAgentId,
-            sessionFile,
-            workspaceDir,
-            body,
-            isFallbackRetry,
-            resolvedThinkLevel,
-            timeoutMs,
+            provider,
+            model,
             runId,
-            opts,
-            runContext,
-            spawnedBy,
-            messageChannel,
-            skillsSnapshot,
-            resolvedVerboseLevel,
             agentDir,
-            primaryProvider: provider,
-            sessionStore,
-            storePath,
-            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-            onAgentEvent: (evt) => {
-              // Track lifecycle end for fallback emission below.
-              if (
-                evt.stream === "lifecycle" &&
-                typeof evt.data?.phase === "string" &&
-                (evt.data.phase === "end" || evt.data.phase === "error")
-              ) {
-                lifecycleEnded = true;
-              }
+            fallbacksOverride: effectiveFallbacksOverride,
+            run: (providerOverride, modelOverride, runOptions) => {
+              const isFallbackRetry = fallbackAttemptIndex > 0;
+              fallbackAttemptIndex += 1;
+              return runAgentAttempt({
+                providerOverride,
+                modelOverride,
+                cfg,
+                sessionEntry,
+                sessionId,
+                sessionKey,
+                sessionAgentId,
+                sessionFile,
+                workspaceDir,
+                body,
+                isFallbackRetry,
+                resolvedThinkLevel,
+                timeoutMs,
+                runId,
+                opts,
+                runContext,
+                spawnedBy,
+                messageChannel,
+                skillsSnapshot,
+                resolvedVerboseLevel,
+                agentDir,
+                primaryProvider: provider,
+                sessionStore,
+                storePath,
+                allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+                onAgentEvent: (evt) => {
+                  // Track lifecycle end for fallback emission below.
+                  if (
+                    evt.stream === "lifecycle" &&
+                    typeof evt.data?.phase === "string" &&
+                    (evt.data.phase === "end" || evt.data.phase === "error")
+                  ) {
+                    lifecycleEnded = true;
+                  }
+                },
+              });
             },
           });
-        },
-      });
-      result = fallbackResult.result;
-      fallbackProvider = fallbackResult.provider;
-      fallbackModel = fallbackResult.model;
+          result = fallbackResult.result;
+          fallbackProvider = fallbackResult.provider;
+          fallbackModel = fallbackResult.model;
+          break;
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          const canRetryWithFreshSubagentSession =
+            !hasRetriedWithFreshSubagentSession &&
+            Boolean(sessionKey) &&
+            isSubagentSessionKey(sessionKey) &&
+            isLikelyContextOverflowError(errorMessage);
+
+          if (!canRetryWithFreshSubagentSession) {
+            throw err;
+          }
+          const activeSessionKey = sessionKey;
+          if (!activeSessionKey) {
+            throw err;
+          }
+
+          hasRetriedWithFreshSubagentSession = true;
+          try {
+            const refreshedEntry = await resetSubagentSessionAfterContextOverflow({
+              sessionKey: activeSessionKey,
+              storePath,
+              sessionStore,
+            });
+            sessionEntry = refreshedEntry;
+            if (refreshedEntry?.sessionId?.trim()) {
+              sessionId = refreshedEntry.sessionId.trim();
+            }
+
+            const resolvedSessionFile = await resolveSessionTranscriptFile({
+              sessionId,
+              sessionKey,
+              sessionStore,
+              storePath,
+              sessionEntry,
+              agentId: sessionAgentId,
+              threadId: opts.threadId,
+            });
+            sessionFile = resolvedSessionFile.sessionFile;
+            sessionEntry = resolvedSessionFile.sessionEntry;
+
+            fallbackAttemptIndex = 0;
+            log.warn(
+              `Context overflow detected for subagent session ${activeSessionKey}. Session was reset and the run is being retried once with a fresh transcript.`,
+            );
+          } catch (resetErr) {
+            log.warn(
+              `Failed to reset subagent session after context overflow (${activeSessionKey}): ${String(resetErr)}`,
+            );
+            throw err;
+          }
+        }
+      }
       if (!lifecycleEnded) {
         const stopReason = result.meta.stopReason;
         if (stopReason && stopReason !== "end_turn") {
