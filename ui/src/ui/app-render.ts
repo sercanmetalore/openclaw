@@ -1826,15 +1826,15 @@ export function renderApp(state: AppViewState) {
                   !AI_AGENTS_SECTION_KEYS.includes(
                     state.aiAgentsActiveSection as AiAgentsSectionKey,
                   )
-                    ? null
-                    : state.aiAgentsActiveSection,
+                    ? AI_AGENTS_SECTION_KEYS[0]
+                    : (state.aiAgentsActiveSection ?? AI_AGENTS_SECTION_KEYS[0]),
                 activeSubsection:
                   state.aiAgentsActiveSection &&
-                  !AI_AGENTS_SECTION_KEYS.includes(
+                  AI_AGENTS_SECTION_KEYS.includes(
                     state.aiAgentsActiveSection as AiAgentsSectionKey,
                   )
-                    ? null
-                    : state.aiAgentsActiveSubsection,
+                    ? state.aiAgentsActiveSubsection
+                    : null,
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },

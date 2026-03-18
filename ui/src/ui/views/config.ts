@@ -13,6 +13,21 @@ import {
 } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
 
+type ConfigDiffEntry = { path: string; from: unknown; to: unknown };
+
+const analysisCache = new WeakMap<object, ReturnType<typeof analyzeConfigSchema>>();
+const scopedAnalysisCache = new WeakMap<
+  object,
+  Map<string, ReturnType<typeof analyzeConfigSchema>>
+>();
+
+let lastPrimitiveScopedKey: string | null = null;
+let lastPrimitiveScopedValue: ReturnType<typeof analyzeConfigSchema> | null = null;
+
+let lastDiffOriginalRef: Record<string, unknown> | null = null;
+let lastDiffCurrentRef: Record<string, unknown> | null = null;
+let lastDiffResult: ConfigDiffEntry[] = [];
+
 export type ConfigProps = {
   raw: string;
   originalRaw: string;
@@ -430,6 +445,73 @@ function scopeUnsupportedPaths(
   });
 }
 
+function getRawSchemaAnalysis(schema: unknown) {
+  if (!schema || typeof schema !== "object") {
+    return analyzeConfigSchema(schema);
+  }
+  const cached = analysisCache.get(schema as object);
+  if (cached) {
+    return cached;
+  }
+  const analyzed = analyzeConfigSchema(schema);
+  analysisCache.set(schema as object, analyzed);
+  return analyzed;
+}
+
+function getScopedSchemaAnalysis(params: {
+  schema: unknown;
+  include: ReadonlySet<string> | null;
+  exclude: ReadonlySet<string> | null;
+}) {
+  const rawAnalysis = getRawSchemaAnalysis(params.schema);
+  const includeKey = params.include ? [...params.include].toSorted().join(",") : "";
+  const excludeKey = params.exclude ? [...params.exclude].toSorted().join(",") : "";
+  const scopedKey = `${includeKey}|${excludeKey}`;
+
+  if (params.schema && typeof params.schema === "object") {
+    let perSchema = scopedAnalysisCache.get(params.schema as object);
+    if (!perSchema) {
+      perSchema = new Map<string, ReturnType<typeof analyzeConfigSchema>>();
+      scopedAnalysisCache.set(params.schema as object, perSchema);
+    }
+    const cached = perSchema.get(scopedKey);
+    if (cached) {
+      return cached;
+    }
+    const scoped = {
+      schema: scopeSchemaSections(rawAnalysis.schema, {
+        include: params.include,
+        exclude: params.exclude,
+      }),
+      unsupportedPaths: scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, {
+        include: params.include,
+        exclude: params.exclude,
+      }),
+    };
+    perSchema.set(scopedKey, scoped);
+    return scoped;
+  }
+
+  const primitiveCacheKey = `primitive|${scopedKey}`;
+  if (lastPrimitiveScopedKey === primitiveCacheKey && lastPrimitiveScopedValue) {
+    return lastPrimitiveScopedValue;
+  }
+
+  const scoped = {
+    schema: scopeSchemaSections(rawAnalysis.schema, {
+      include: params.include,
+      exclude: params.exclude,
+    }),
+    unsupportedPaths: scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, {
+      include: params.include,
+      exclude: params.exclude,
+    }),
+  };
+  lastPrimitiveScopedKey = primitiveCacheKey;
+  lastPrimitiveScopedValue = scoped;
+  return scoped;
+}
+
 function resolveSectionMeta(
   key: string,
   schema?: JsonSchema,
@@ -450,11 +532,11 @@ function resolveSectionMeta(
 function computeDiff(
   original: Record<string, unknown> | null,
   current: Record<string, unknown> | null,
-): Array<{ path: string; from: unknown; to: unknown }> {
+): ConfigDiffEntry[] {
   if (!original || !current) {
     return [];
   }
-  const changes: Array<{ path: string; from: unknown; to: unknown }> = [];
+  const changes: ConfigDiffEntry[] = [];
 
   function compare(orig: unknown, curr: unknown, path: string) {
     if (orig === curr) {
@@ -486,6 +568,26 @@ function computeDiff(
 
   compare(original, current, "");
   return changes;
+}
+
+function computeDiffMemoized(
+  original: Record<string, unknown> | null,
+  current: Record<string, unknown> | null,
+): ConfigDiffEntry[] {
+  if (!original || !current) {
+    return [];
+  }
+  if (original === current) {
+    return [];
+  }
+  if (lastDiffOriginalRef === original && lastDiffCurrentRef === current) {
+    return lastDiffResult;
+  }
+  const next = computeDiff(original, current);
+  lastDiffOriginalRef = original;
+  lastDiffCurrentRef = current;
+  lastDiffResult = next;
+  return next;
 }
 
 function truncateValue(value: unknown, maxLen = 40): string {
@@ -664,11 +766,7 @@ export function renderConfig(props: ConfigProps) {
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
   const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
-  const rawAnalysis = analyzeConfigSchema(props.schema);
-  const analysis = {
-    schema: scopeSchemaSections(rawAnalysis.schema, { include, exclude }),
-    unsupportedPaths: scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, { include, exclude }),
-  };
+  const analysis = getScopedSchemaAnalysis({ schema: props.schema, include, exclude });
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const formMode = showModeToggle ? props.formMode : "form";
   const envSensitiveVisible = cvs.envRevealed;
@@ -718,7 +816,8 @@ export function renderConfig(props: ConfigProps) {
   ];
 
   // Compute diff for showing changes (works for both form and raw modes)
-  const diff = formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
+  const diff =
+    formMode === "form" ? computeDiffMemoized(props.originalValue, props.formValue) : [];
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
   const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
 
