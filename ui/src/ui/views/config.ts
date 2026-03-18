@@ -46,6 +46,7 @@ export type ConfigProps = {
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   searchQuery: string;
+  searchInputValue?: string;
   activeSection: string | null;
   activeSubsection: string | null;
   onRawChange: (next: string) => void;
@@ -816,8 +817,7 @@ export function renderConfig(props: ConfigProps) {
   ];
 
   // Compute diff for showing changes (works for both form and raw modes)
-  const diff =
-    formMode === "form" ? computeDiffMemoized(props.originalValue, props.formValue) : [];
+  const diff = formMode === "form" ? computeDiffMemoized(props.originalValue, props.formValue) : [];
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
   const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
 
@@ -833,6 +833,7 @@ export function renderConfig(props: ConfigProps) {
     hasChanges &&
     (formMode === "raw" ? true : canSaveForm);
   const canUpdate = props.connected && !props.applying && !props.updating;
+  const searchInputValue = props.searchInputValue ?? props.searchQuery;
 
   const showAppearanceOnRoot =
     includeVirtualSections &&
@@ -926,12 +927,12 @@ export function renderConfig(props: ConfigProps) {
                         type="text"
                         class="config-search__input"
                         placeholder="Search settings..."
-                        .value=${props.searchQuery}
+                        .value=${searchInputValue}
                         @input=${(e: Event) =>
                           props.onSearchChange((e.target as HTMLInputElement).value)}
                       />
                       ${
-                        props.searchQuery
+                        searchInputValue
                           ? html`
                               <button
                                 class="config-search__clear"

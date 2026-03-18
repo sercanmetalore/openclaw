@@ -139,6 +139,8 @@ export type AppViewState = {
   infrastructureActiveSubsection: string | null;
   aiAgentsFormMode: "form" | "raw";
   aiAgentsSearchQuery: string;
+  aiAgentsSearchQueryDraft: string;
+  aiAgentsSearchDebounceTimer: number | null;
   aiAgentsActiveSection: string | null;
   aiAgentsActiveSubsection: string | null;
   channelsLoading: boolean;

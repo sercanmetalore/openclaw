@@ -1822,6 +1822,7 @@ export function renderApp(state: AppViewState) {
                 formValue: state.configForm,
                 originalValue: state.configFormOriginal,
                 searchQuery: state.aiAgentsSearchQuery,
+                searchInputValue: state.aiAgentsSearchQueryDraft,
                 activeSection:
                   state.aiAgentsActiveSection &&
                   !AI_AGENTS_SECTION_KEYS.includes(
@@ -1831,9 +1832,7 @@ export function renderApp(state: AppViewState) {
                     : (state.aiAgentsActiveSection ?? AI_AGENTS_DEFAULT_SECTION),
                 activeSubsection:
                   state.aiAgentsActiveSection &&
-                  AI_AGENTS_SECTION_KEYS.includes(
-                    state.aiAgentsActiveSection as AiAgentsSectionKey,
-                  )
+                  AI_AGENTS_SECTION_KEYS.includes(state.aiAgentsActiveSection as AiAgentsSectionKey)
                     ? state.aiAgentsActiveSubsection
                     : null,
                 onRawChange: (next) => {
@@ -1841,7 +1840,21 @@ export function renderApp(state: AppViewState) {
                 },
                 onFormModeChange: (mode) => (state.aiAgentsFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.aiAgentsSearchQuery = query),
+                onSearchChange: (query) => {
+                  state.aiAgentsSearchQueryDraft = query;
+                  if (state.aiAgentsSearchDebounceTimer != null) {
+                    window.clearTimeout(state.aiAgentsSearchDebounceTimer);
+                    state.aiAgentsSearchDebounceTimer = null;
+                  }
+                  if (!query.trim()) {
+                    state.aiAgentsSearchQuery = "";
+                    return;
+                  }
+                  state.aiAgentsSearchDebounceTimer = window.setTimeout(() => {
+                    state.aiAgentsSearchQuery = state.aiAgentsSearchQueryDraft;
+                    state.aiAgentsSearchDebounceTimer = null;
+                  }, 150);
+                },
                 onSectionChange: (section) => {
                   state.aiAgentsActiveSection = section;
                   state.aiAgentsActiveSubsection = null;

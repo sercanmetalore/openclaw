@@ -233,6 +233,7 @@ export class OpenClawApp extends LitElement {
   @state() infrastructureActiveSubsection: string | null = null;
   @state() aiAgentsFormMode: "form" | "raw" = "form";
   @state() aiAgentsSearchQuery = "";
+  @state() aiAgentsSearchQueryDraft = "";
   @state() aiAgentsActiveSection: string | null = null;
   @state() aiAgentsActiveSubsection: string | null = null;
 
@@ -345,6 +346,7 @@ export class OpenClawApp extends LitElement {
 
   // Non-reactive (don’t trigger renders just for timer bookkeeping).
   usageQueryDebounceTimer: number | null = null;
+  aiAgentsSearchDebounceTimer: number | null = null;
 
   @state() cronLoading = false;
   @state() cronJobsLoadingMore = false;
@@ -488,6 +490,10 @@ export class OpenClawApp extends LitElement {
   }
 
   disconnectedCallback() {
+    if (this.aiAgentsSearchDebounceTimer != null) {
+      window.clearTimeout(this.aiAgentsSearchDebounceTimer);
+      this.aiAgentsSearchDebounceTimer = null;
+    }
     document.removeEventListener("keydown", this.globalKeydownHandler);
     handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);
     super.disconnectedCallback();
