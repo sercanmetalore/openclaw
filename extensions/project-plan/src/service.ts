@@ -31,6 +31,7 @@ type TranscriptMessage = {
   stopReason?: string;
   errorMessage?: unknown;
   error?: unknown;
+  timestamp?: unknown;
 };
 
 type ToolCallLike = {
@@ -45,18 +46,208 @@ type AssistantOutcome = {
   transientToolOnlyIssue?: boolean;
 };
 
+function isYieldOrDelegationIssue(message: string | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  return /Assistant yielded|Assistant delegated work/i.test(message);
+}
+
 function buildSessionKey(params: {
-  plan: ProjectPlanRecord;
+  agentId: string;
+  itemScopedSessions: boolean;
+  planId: string;
   item: ProjectPlanItem;
   runSessionId: string;
 }): string {
-  const { plan, item, runSessionId } = params;
-  const agentId = plan.settings.defaultAgentId ?? "main";
-  const baseSessionKey = `agent:${agentId}:project-plan-${plan.id}`;
-  if (plan.settings.itemScopedSessions === false) {
+  const { agentId, itemScopedSessions, planId, item, runSessionId } = params;
+  const baseSessionKey = `agent:${agentId}:project-plan-${planId}`;
+  if (!itemScopedSessions) {
     return baseSessionKey;
   }
   return `${baseSessionKey}:run-${runSessionId}:item-${item.id}`;
+}
+
+function normalizeText(value: string): string {
+  return value
+    .toLowerCase()
+    .replaceAll("ı", "i")
+    .replaceAll("İ", "i")
+    .replaceAll("ş", "s")
+    .replaceAll("Ş", "s")
+    .replaceAll("ğ", "g")
+    .replaceAll("Ğ", "g")
+    .replaceAll("ü", "u")
+    .replaceAll("Ü", "u")
+    .replaceAll("ö", "o")
+    .replaceAll("Ö", "o")
+    .replaceAll("ç", "c")
+    .replaceAll("Ç", "c");
+}
+
+function findAssigneeRole(text: string): string {
+  const match = text.match(/Assignee role:\s*([^\n\r]+)/i);
+  return match?.[1]?.trim() ?? "";
+}
+
+function mapRoleToAgentId(params: {
+  configuredIds: Set<string>;
+  role: string;
+}): { agentId: string; reason: string } | undefined {
+  const role = normalizeText(params.role);
+  if (!role) {
+    return undefined;
+  }
+
+  const roleRules: Array<{ target: string; tokens: string[]; reason: string }> = [
+    {
+      target: "softdev-devops",
+      tokens: ["devops", "sre", "platform", "infrastructure"],
+      reason: "assignee-role-devops",
+    },
+    {
+      target: "softdev-qa",
+      tokens: ["qa", "quality", "test"],
+      reason: "assignee-role-qa",
+    },
+    {
+      target: "softdev-database",
+      tokens: ["database", "data", "sql", "typeorm"],
+      reason: "assignee-role-database",
+    },
+    {
+      target: "softdev-backend",
+      tokens: ["backend", "api", "server"],
+      reason: "assignee-role-backend",
+    },
+    {
+      target: "softdev-frontend",
+      tokens: ["frontend", "ui", "ux"],
+      reason: "assignee-role-frontend",
+    },
+    {
+      target: "softdev-security",
+      tokens: ["security", "secops"],
+      reason: "assignee-role-security",
+    },
+    {
+      target: "softdev-docs",
+      tokens: ["docs", "documentation", "technical writer"],
+      reason: "assignee-role-docs",
+    },
+    {
+      target: "softdev-release",
+      tokens: ["release", "reliability"],
+      reason: "assignee-role-release",
+    },
+  ];
+
+  for (const rule of roleRules) {
+    if (!params.configuredIds.has(rule.target)) {
+      continue;
+    }
+    if (rule.tokens.some((token) => role.includes(token))) {
+      return { agentId: rule.target, reason: rule.reason };
+    }
+  }
+  return undefined;
+}
+
+function chooseExecutionAgentId(params: {
+  api: OpenClawPluginApi;
+  plan: ProjectPlanRecord;
+  item: ProjectPlanItem;
+}): { agentId: string; reason: string } {
+  const { api, plan, item } = params;
+  const defaultAgentId = plan.settings.defaultAgentId ?? "main";
+  const configuredIds = new Set(
+    (api.config.agents?.list ?? [])
+      .map((entry) => (typeof entry?.id === "string" ? entry.id.trim() : ""))
+      .filter(Boolean),
+  );
+  configuredIds.add(defaultAgentId);
+  configuredIds.add("main");
+
+  // Keep behavior unchanged for non-softdev setups.
+  if (!defaultAgentId.startsWith("softdev")) {
+    return { agentId: defaultAgentId, reason: "default-agent" };
+  }
+
+  const context = buildExecutionContext(plan, item);
+  const itemAndTaskText = [
+    item.title,
+    item.description ?? "",
+    context.task?.title ?? "",
+    context.task?.description ?? "",
+  ]
+    .join("\n")
+    .trim();
+
+  const explicitRole =
+    findAssigneeRole(item.description ?? "") ||
+    findAssigneeRole(context.task?.description ?? "") ||
+    findAssigneeRole(context.epic?.description ?? "");
+
+  const mappedByRole = mapRoleToAgentId({ configuredIds, role: explicitRole });
+  if (mappedByRole) {
+    return mappedByRole;
+  }
+
+  const haystack = normalizeText(itemAndTaskText);
+
+  const routeRules: Array<{ target: string; tokens: string[]; reason: string }> = [
+    {
+      target: "softdev-qa",
+      tokens: ["qa", "test", "fixture", "smoke", "e2e", "integration", "validation"],
+      reason: "qa-keywords",
+    },
+    {
+      target: "softdev-devops",
+      tokens: ["devops", "docker", "kubernetes", "helm", "ci", "cd", "deploy", "infrastructure"],
+      reason: "devops-keywords",
+    },
+    {
+      target: "softdev-database",
+      tokens: ["database", "db", "sql", "typeorm", "migration", "schema", "postgres", "query"],
+      reason: "database-keywords",
+    },
+    {
+      target: "softdev-backend",
+      tokens: ["backend", "api", "nest", "service", "controller", "endpoint"],
+      reason: "backend-keywords",
+    },
+    {
+      target: "softdev-frontend",
+      tokens: ["frontend", "ui", "ux", "react", "component", "page", "style"],
+      reason: "frontend-keywords",
+    },
+    {
+      target: "softdev-security",
+      tokens: ["security", "vulnerability", "auth", "permission", "encryption", "xss", "csrf"],
+      reason: "security-keywords",
+    },
+    {
+      target: "softdev-docs",
+      tokens: ["docs", "documentation", "readme", "guide", "mintlify"],
+      reason: "docs-keywords",
+    },
+    {
+      target: "softdev-release",
+      tokens: ["release", "changelog", "version", "publish", "tag", "notar"],
+      reason: "release-keywords",
+    },
+  ];
+
+  for (const rule of routeRules) {
+    if (!configuredIds.has(rule.target)) {
+      continue;
+    }
+    if (rule.tokens.some((token) => haystack.includes(token))) {
+      return { agentId: rule.target, reason: rule.reason };
+    }
+  }
+
+  return { agentId: defaultAgentId, reason: "fallback-default" };
 }
 
 const runners = new Map<string, RunnerState>();
@@ -184,7 +375,23 @@ async function runPlanLoop(params: {
       await processItem({
         plan,
         item: nextItem,
-        sessionKey: buildSessionKey({ plan, item: nextItem, runSessionId }),
+        sessionKey: (() => {
+          const route = chooseExecutionAgentId({ api, plan, item: nextItem });
+          plan.logs.push(
+            createLog({
+              level: "info",
+              message: `Routing: ${nextItem.title} -> ${route.agentId} (${route.reason})`,
+              itemId: nextItem.id,
+            }),
+          );
+          return buildSessionKey({
+            agentId: route.agentId,
+            itemScopedSessions: plan.settings.itemScopedSessions !== false,
+            planId: plan.id,
+            item: nextItem,
+            runSessionId,
+          });
+        })(),
         projectPath,
         stateDir,
         api,
@@ -232,6 +439,7 @@ async function processItem(params: {
   await savePlan(stateDir, plan, { maxLogEntries: maxLog });
 
   try {
+    const runStartedAt = Date.now();
     const { runId } = await api.runtime.subagent.run({
       sessionKey,
       idempotencyKey: crypto.randomUUID(),
@@ -266,15 +474,74 @@ async function processItem(params: {
     }
 
     if (result.status === "ok") {
-      const assistantOutcome = await getLastAssistantOutcomeWithRetry({
+      let assistantOutcome = await getLastAssistantOutcomeWithRetry({
         api,
         sessionKey,
-        attempts: 12,
+        attempts: 30,
         delayMs: 500,
+        sinceTimestampMs: runStartedAt,
       });
-      const completion = classifyCompletion(assistantOutcome.text, {
+      let completion = classifyCompletion(assistantOutcome.text, {
         assistantErrorMessage: assistantOutcome.errorMessage,
       });
+
+      // If the model ended in a tool-only yield/delegation turn, retry once with an explicit
+      // follow-up that asks for a final completion message in the same session.
+      if (!completion.ok && isYieldOrDelegationIssue(assistantOutcome.errorMessage)) {
+        plan.logs.push(
+          createLog({
+            level: "warn",
+            message: `Recovery retry: ${item.title} (${assistantOutcome.errorMessage})`,
+            itemId: item.id,
+          }),
+        );
+
+        const recoveryStartedAt = Date.now();
+        const { runId: recoveryRunId } = await api.runtime.subagent.run({
+          sessionKey,
+          idempotencyKey: crypto.randomUUID(),
+          message: [
+            `Retry the current item now: ${item.title}`,
+            "Delegation is allowed, but this workflow requires a final completion message from you.",
+            "If you already delegated work, collect the result and synthesize it.",
+            "Do not end with tool calls only.",
+            "Send a final completion message now.",
+          ].join("\n"),
+          extraSystemPrompt: buildSystemPrompt(projectPath),
+        });
+
+        runnerState.activeRun = { runId: recoveryRunId, sessionKey };
+        runnerState.abortRequested = false;
+        if (runnerState.stopRequested) {
+          requestActiveRunAbort({ api, planId: plan.id, state: runnerState });
+        }
+
+        const recoveryResult = await waitForRunWithStopPolling({
+          api,
+          runId: recoveryRunId,
+          planId: plan.id,
+          runnerState,
+          timeoutMs,
+        });
+
+        if (recoveryResult.status === "ok") {
+          assistantOutcome = await getLastAssistantOutcomeWithRetry({
+            api,
+            sessionKey,
+            attempts: 30,
+            delayMs: 500,
+            sinceTimestampMs: recoveryStartedAt,
+          });
+          completion = classifyCompletion(assistantOutcome.text, {
+            assistantErrorMessage: assistantOutcome.errorMessage,
+          });
+        } else {
+          completion = {
+            ok: false,
+            reason: `Agent run error: recovery attempt ended with ${recoveryResult.status}`,
+          };
+        }
+      }
 
       if (completion.ok) {
         item.status = "done";
@@ -466,12 +733,36 @@ function extractAssistantToolOnlyIssue(message: TranscriptMessage): string {
   return "";
 }
 
-function extractLastAssistantOutcome(messages: unknown[]): AssistantOutcome {
+function toTimestampMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function extractLastAssistantOutcome(
+  messages: unknown[],
+  options?: { sinceTimestampMs?: number },
+): AssistantOutcome {
+  const sinceTimestampMs = options?.sinceTimestampMs;
   const typed = messages as TranscriptMessage[];
   for (let i = typed.length - 1; i >= 0; i -= 1) {
     const msg = typed[i];
     if (msg?.role !== "assistant") {
       continue;
+    }
+
+    if (typeof sinceTimestampMs === "number") {
+      const msgTimestampMs = toTimestampMs(msg.timestamp);
+      if (typeof msgTimestampMs === "number" && msgTimestampMs < sinceTimestampMs) {
+        continue;
+      }
     }
 
     const text = extractTextContent(msg.content);
@@ -505,15 +796,16 @@ async function getLastAssistantOutcomeWithRetry(params: {
   sessionKey: string;
   attempts: number;
   delayMs: number;
+  sinceTimestampMs?: number;
 }): Promise<AssistantOutcome> {
-  const { api, sessionKey, attempts, delayMs } = params;
+  const { api, sessionKey, attempts, delayMs, sinceTimestampMs } = params;
   let lastTransientToolOnlyIssue = "";
   for (let i = 0; i < attempts; i += 1) {
     const transcript = await api.runtime.subagent.getSessionMessages({
       sessionKey,
       limit: 200,
     });
-    const outcome = extractLastAssistantOutcome(transcript.messages);
+    const outcome = extractLastAssistantOutcome(transcript.messages, { sinceTimestampMs });
     if (outcome.text) {
       return outcome;
     }
@@ -546,10 +838,23 @@ export function classifyCompletion(
     return { ok: false, reason: "No assistant completion message" };
   }
 
-  const failurePattern =
-    /\b(cannot|can't|could not|unable|failed|error|not found|permission denied|path escapes sandbox root|no such file|refuse|rejected)\b/i;
-  if (failurePattern.test(text)) {
+  const normalized = normalizeText(text);
+  const completionPattern =
+    /(✅|\b(completed|done|finished|implemented|successful|successfully|tamamlandi|tamamlandı|bitti)\b)/i;
+
+  // Long status reports can include incidental failure words while still ending in
+  // an explicit completion statement. Prefer the final summary signal in that case.
+  const trailingWindow = normalized.slice(-500);
+  const hasTrailingCompletionSignal = completionPattern.test(trailingWindow);
+
+  const hardFailurePattern =
+    /(cannot|can't|could not|unable to|failed to|permission denied|path escapes sandbox root|no such file|rejected|refused)[^\n\r]{0,160}(complete|finish|proceed|execute|perform|run|do|continue)/i;
+  if (hardFailurePattern.test(normalized) && !hasTrailingCompletionSignal) {
     return { ok: false, reason: "Agent response indicates the task could not be completed" };
+  }
+
+  if (completionPattern.test(normalized)) {
+    return { ok: true };
   }
 
   return { ok: true };
@@ -597,8 +902,8 @@ function buildItemMessage(
   lines.push(
     "",
     "Implement only the current execution item.",
-    "Do not delegate this task to child/sub-agents.",
-    "Do not use sessions_yield. Finish the work in this session and then report completion.",
+    "You may delegate subtasks when useful, but you must always return with a final completion message.",
+    "Do not end the run with tool calls only; report completion in plain assistant text.",
     "Use the parent task and epic context as mandatory requirements and constraints for this work.",
     `Remember: work exclusively inside ${projectPath}. Do not touch any files outside this directory.`,
     "When you have finished the task, confirm that it is complete.",
@@ -618,8 +923,8 @@ function buildSystemPrompt(projectPath: string): string {
     `3. NEVER create, edit, or delete files outside ${projectPath}.`,
     `4. NEVER run commands that affect paths outside ${projectPath}.`,
     "5. If a task description implies working outside this directory, refuse and note the constraint.",
-    "6. Do NOT delegate to child/sub-agents.",
-    "7. Do NOT call sessions_yield; complete in one run and send a final completion message.",
+    "6. Delegation to child/sub-agents is allowed when needed.",
+    "7. You must send a final completion message in assistant text; do not end with tool calls only.",
     "",
     "Complete the assigned task fully within the workspace and confirm when done.",
   ].join("\n");

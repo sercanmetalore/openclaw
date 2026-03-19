@@ -303,6 +303,7 @@ let state = {
   availableAgents: [],   // [{id, name?}]
   allAccounts: [],       // public account list from /api/accounts
   refreshTimer: null,
+  settingsDirty: false,
 };
 
 // ── API ──────────────────────────────────────────────────────────────────────
@@ -359,19 +360,61 @@ async function loadPlans() {
     if (state.selectedId) {
       if (!state.plans.find(p => p.id === state.selectedId)) {
         state.selectedId = null; state.detail = null; renderContent();
-      } else { await loadDetail(state.selectedId); }
+      } else { await loadDetail(state.selectedId, 0, { source: 'auto' }); }
     }
     scheduleRefresh();
   } catch(e) { showErr(String(e)); }
 }
 
-async function loadDetail(planId, attempt = 0) {
+async function loadDetail(planId, attempt = 0, options = {}) {
+  const source = options.source || 'manual';
   try {
+    const prevDetail = state.detail;
+    const samePlan = prevDetail?.plan?.id === planId;
+    const prevTab = state.tab;
+    const prevTabBody = el('tab-body');
+    const prevTabScrollTop = prevTabBody?.scrollTop || 0;
+    const prevRunning = !!prevDetail?.dashboard?.running;
+
     const data = await apiFetch('GET', '/plans/' + planId);
     state.selectedId = planId; state.detail = data;
     if (data.availableAccounts) state.availableAccounts = data.availableAccounts;
     if (data.availableAgents) state.availableAgents = data.availableAgents;
-    renderSidebar(); renderContent();
+
+    if (!samePlan) {
+      state.settingsDirty = false;
+    }
+
+    renderSidebar();
+
+    const nextRunning = !!data?.dashboard?.running;
+    const canPartialRefresh =
+      source === 'auto' &&
+      samePlan &&
+      !state.settingsDirty &&
+      prevTabBody &&
+      prevRunning === nextRunning;
+
+    // Avoid resetting unsaved form fields while user is editing settings.
+    if (source === 'auto' && samePlan && state.tab === 'settings' && state.settingsDirty) {
+      scheduleRefresh();
+      return;
+    }
+
+    if (canPartialRefresh) {
+      renderTab();
+      const nextTabBody = el('tab-body');
+      if (nextTabBody && prevTab === state.tab) {
+        nextTabBody.scrollTop = prevTabScrollTop;
+      }
+    } else {
+      renderContent();
+      const nextTabBody = el('tab-body');
+      if (source === 'auto' && nextTabBody && prevTab === state.tab) {
+        nextTabBody.scrollTop = prevTabScrollTop;
+      }
+    }
+
     scheduleRefresh();
   } catch(e) {
     const msg = String(e);
@@ -405,7 +448,7 @@ function scheduleRefresh() {
   clearTimeout(state.refreshTimer);
   const running = state.plans.some(p => p.running) || state.detail?.dashboard?.running;
   if (running) state.refreshTimer = setTimeout(() => {
-    if (state.selectedId) loadDetail(state.selectedId); else loadPlans();
+    if (state.selectedId) loadDetail(state.selectedId, 0, { source: 'auto' }); else loadPlans();
   }, 3000);
 }
 
@@ -683,6 +726,12 @@ function renderProviderFields(s) {
 }
 
 function bindSettings(plan) {
+  const markDirty = () => { state.settingsDirty = true; };
+  document.querySelectorAll('#tab-body input, #tab-body select, #tab-body textarea').forEach((node) => {
+    node.addEventListener('input', markDirty);
+    node.addEventListener('change', markDirty);
+  });
+
   // Source change → re-render provider fields
   el('s-source-sel')?.addEventListener('change', () => {
     const sel = el('s-source-sel');
@@ -715,6 +764,7 @@ function bindSettings(plan) {
       providerPlanId: el('s-plan-id')?.value || undefined,
       syncMode: plan.settings.syncMode || 'manual',
     };
+    state.settingsDirty = false;
     await apiFetch('PUT', '/plans/'+plan.id+'/settings', {settings}).catch(e => showErr(String(e)));
     await loadDetail(plan.id);
   });
