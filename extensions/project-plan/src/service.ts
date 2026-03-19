@@ -33,6 +33,10 @@ type TranscriptMessage = {
   error?: unknown;
 };
 
+type ToolCallLike = {
+  name?: unknown;
+};
+
 type CompletionResult =
   | { ok: true }
   | { ok: false; reason: string };
@@ -406,6 +410,49 @@ function extractAssistantErrorMessage(message: TranscriptMessage): string {
   return "";
 }
 
+function extractAssistantToolOnlyIssue(message: TranscriptMessage): string {
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  let hasText = false;
+  let sawYield = false;
+  let sawSpawn = false;
+
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const entry = part as Record<string, unknown>;
+    if (entry.type === "text" && typeof entry.text === "string" && entry.text.trim()) {
+      hasText = true;
+      break;
+    }
+    if (entry.type === "toolCall") {
+      const call = part as ToolCallLike;
+      const toolName = typeof call.name === "string" ? call.name : "";
+      if (toolName === "sessions_yield") {
+        sawYield = true;
+      }
+      if (toolName === "sessions_spawn") {
+        sawSpawn = true;
+      }
+    }
+  }
+
+  if (hasText) {
+    return "";
+  }
+  if (sawYield) {
+    return "Assistant yielded before sending a completion message";
+  }
+  if (sawSpawn) {
+    return "Assistant delegated work but did not send a completion message";
+  }
+  return "";
+}
+
 function extractLastAssistantOutcome(messages: unknown[]): AssistantOutcome {
   const typed = messages as TranscriptMessage[];
   for (let i = typed.length - 1; i >= 0; i -= 1) {
@@ -424,6 +471,14 @@ function extractLastAssistantOutcome(messages: unknown[]): AssistantOutcome {
       return {
         text: "",
         errorMessage: errorMessage || "Assistant run ended with an error",
+      };
+    }
+
+    const toolOnlyIssue = extractAssistantToolOnlyIssue(msg);
+    if (toolOnlyIssue) {
+      return {
+        text: "",
+        errorMessage: toolOnlyIssue,
       };
     }
   }
@@ -517,6 +572,8 @@ function buildItemMessage(
   lines.push(
     "",
     "Implement only the current execution item.",
+    "Do not delegate this task to child/sub-agents.",
+    "Do not use sessions_yield. Finish the work in this session and then report completion.",
     "Use the parent task and epic context as mandatory requirements and constraints for this work.",
     `Remember: work exclusively inside ${projectPath}. Do not touch any files outside this directory.`,
     "When you have finished the task, confirm that it is complete.",
@@ -536,6 +593,8 @@ function buildSystemPrompt(projectPath: string): string {
     `3. NEVER create, edit, or delete files outside ${projectPath}.`,
     `4. NEVER run commands that affect paths outside ${projectPath}.`,
     "5. If a task description implies working outside this directory, refuse and note the constraint.",
+    "6. Do NOT delegate to child/sub-agents.",
+    "7. Do NOT call sessions_yield; complete in one run and send a final completion message.",
     "",
     "Complete the assigned task fully within the workspace and confirm when done.",
   ].join("\n");
