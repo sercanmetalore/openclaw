@@ -26,4 +26,15 @@ describe("project-plan completion classification", () => {
       reason: "Agent run error: Failed to extract accountId from token",
     });
   });
+
+  it("surfaces assistant yield/delegation completion errors when message is missing", () => {
+    expect(
+      classifyCompletion("", {
+        assistantErrorMessage: "Assistant yielded before sending a completion message",
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "Agent run error: Assistant yielded before sending a completion message",
+    });
+  });
 });

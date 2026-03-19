@@ -1,14 +1,14 @@
 // ── Background agent execution service ───────────────────────────────────────
 
 import crypto from "node:crypto";
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk";
-import { createLog, loadPlan, savePlan } from "./store.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import {
   buildExecutionContext,
   findNextExecutableItem,
   hasOutstandingExecutableItems,
   recomputeContainerStatuses,
 } from "./execution.js";
+import { createLog, loadPlan, savePlan } from "./store.js";
 import type { ProjectPlanItem, ProjectPlanPluginConfig, ProjectPlanRecord } from "./types.js";
 
 const DEFAULT_ITEM_TIMEOUT_MINUTES = 30;
@@ -37,13 +37,12 @@ type ToolCallLike = {
   name?: unknown;
 };
 
-type CompletionResult =
-  | { ok: true }
-  | { ok: false; reason: string };
+type CompletionResult = { ok: true } | { ok: false; reason: string };
 
 type AssistantOutcome = {
   text: string;
   errorMessage?: string;
+  transientToolOnlyIssue?: boolean;
 };
 
 function buildSessionKey(params: {
@@ -125,10 +124,13 @@ async function runPlanLoop(params: {
   const projectPath = plan.settings.projectPath?.trim() ?? "";
   if (!projectPath) {
     plan.status = "blocked";
-    plan.logs.push(createLog({
-      level: "error",
-      message: "Cannot start: Project Path is not set. Go to Settings and set a project directory.",
-    }));
+    plan.logs.push(
+      createLog({
+        level: "error",
+        message:
+          "Cannot start: Project Path is not set. Go to Settings and set a project directory.",
+      }),
+    );
     await savePlan(stateDir, plan, { maxLogEntries: maxLog });
     runners.delete(planId);
     return;
@@ -138,7 +140,9 @@ async function runPlanLoop(params: {
   plan.metrics.runCount++;
   plan.execution.lastStartedAt = Date.now();
   plan.execution.running = true;
-  plan.logs.push(createLog({ level: "info", message: `Plan execution started. Working in: ${projectPath}` }));
+  plan.logs.push(
+    createLog({ level: "info", message: `Plan execution started. Working in: ${projectPath}` }),
+  );
   await savePlan(stateDir, plan, { maxLogEntries: maxLog });
 
   const runSessionId = crypto.randomUUID();
@@ -158,11 +162,13 @@ async function runPlanLoop(params: {
           plan.status = "blocked";
           plan.execution.running = false;
           plan.execution.currentItemId = undefined;
-          plan.logs.push(createLog({
-            level: "warn",
-            message:
-              "Plan paused because no executable item is in 'to do' state. Check blocked or failed subtasks.",
-          }));
+          plan.logs.push(
+            createLog({
+              level: "warn",
+              message:
+                "Plan paused because no executable item is in 'to do' state. Check blocked or failed subtasks.",
+            }),
+          );
           await savePlan(stateDir, plan, { maxLogEntries: maxLog });
           break;
         }
@@ -215,7 +221,8 @@ async function processItem(params: {
   timeoutMs: number;
   maxLog?: number;
 }): Promise<void> {
-  const { plan, item, sessionKey, projectPath, stateDir, api, runnerState, timeoutMs, maxLog } = params;
+  const { plan, item, sessionKey, projectPath, stateDir, api, runnerState, timeoutMs, maxLog } =
+    params;
 
   item.status = "in progress";
   item.updatedAt = Date.now();
@@ -301,9 +308,15 @@ async function processItem(params: {
     item.status = "failed";
     item.updatedAt = Date.now();
     plan.logs.push(
-      createLog({ level: "error", message: `Error: ${item.title}: ${String(err)}`, itemId: item.id }),
+      createLog({
+        level: "error",
+        message: `Error: ${item.title}: ${String(err)}`,
+        itemId: item.id,
+      }),
     );
-    api.logger.error(`project-plan: item execution error planId=${plan.id} itemId=${item.id} error=${String(err)}`);
+    api.logger.error(
+      `project-plan: item execution error planId=${plan.id} itemId=${item.id} error=${String(err)}`,
+    );
   } finally {
     runnerState.activeRun = undefined;
     runnerState.abortRequested = false;
@@ -479,6 +492,7 @@ function extractLastAssistantOutcome(messages: unknown[]): AssistantOutcome {
       return {
         text: "",
         errorMessage: toolOnlyIssue,
+        transientToolOnlyIssue: true,
       };
     }
   }
@@ -493,18 +507,29 @@ async function getLastAssistantOutcomeWithRetry(params: {
   delayMs: number;
 }): Promise<AssistantOutcome> {
   const { api, sessionKey, attempts, delayMs } = params;
+  let lastTransientToolOnlyIssue = "";
   for (let i = 0; i < attempts; i += 1) {
     const transcript = await api.runtime.subagent.getSessionMessages({
       sessionKey,
       limit: 200,
     });
     const outcome = extractLastAssistantOutcome(transcript.messages);
-    if (outcome.text || outcome.errorMessage) {
+    if (outcome.text) {
       return outcome;
+    }
+    if (outcome.errorMessage) {
+      if (outcome.transientToolOnlyIssue) {
+        lastTransientToolOnlyIssue = outcome.errorMessage;
+      } else {
+        return outcome;
+      }
     }
     if (i < attempts - 1) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
+  }
+  if (lastTransientToolOnlyIssue) {
+    return { text: "", errorMessage: lastTransientToolOnlyIssue };
   }
   return { text: "" };
 }
@@ -602,13 +627,13 @@ function buildSystemPrompt(projectPath: string): string {
 
 // ── OpenClaw service definition ───────────────────────────────────────────────
 
-export function createProjectPlanService(api: OpenClawPluginApi): OpenClawPluginService {
+export function createProjectPlanService(api: OpenClawPluginApi) {
   return {
     id: "project-plan",
-    start: async (_ctx) => {
+    start: async (_ctx: unknown) => {
       api.logger.info("project-plan: service started");
     },
-    stop: async (_ctx) => {
+    stop: async (_ctx: unknown) => {
       for (const [planId, state] of runners.entries()) {
         if (state.running) {
           requestStop(planId, api);
