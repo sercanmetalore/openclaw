@@ -129,3 +129,64 @@ export async function deleteSessionAndRefresh(state: SessionsState, key: string)
   await loadSessions(state);
   return true;
 }
+
+export async function deleteAllSessionsAndRefresh(state: SessionsState): Promise<number> {
+  if (!state.client || !state.connected) {
+    return 0;
+  }
+  if (state.sessionsLoading) {
+    return 0;
+  }
+
+  const confirmed = window.confirm(
+    "Clear all sessions?\n\nThis deletes all deletable sessions and resets protected main sessions.",
+  );
+  if (!confirmed) {
+    return 0;
+  }
+
+  state.sessionsLoading = true;
+  state.sessionsError = null;
+
+  let cleared = 0;
+  const failures: string[] = [];
+  try {
+    const listRes = await state.client.request<SessionsListResult | undefined>("sessions.list", {
+      includeGlobal: state.sessionsIncludeGlobal,
+      includeUnknown: state.sessionsIncludeUnknown,
+      limit: 10000,
+    });
+
+    const sessions = listRes?.sessions ?? state.sessionsResult?.sessions ?? [];
+    for (const row of sessions) {
+      try {
+        await state.client.request("sessions.delete", {
+          key: row.key,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        });
+        cleared += 1;
+      } catch {
+        try {
+          await state.client.request("sessions.reset", {
+            key: row.key,
+            reason: "reset",
+          });
+          cleared += 1;
+        } catch (resetErr) {
+          failures.push(`${row.key}: ${String(resetErr)}`);
+        }
+      }
+    }
+  } finally {
+    state.sessionsLoading = false;
+  }
+
+  await loadSessions(state);
+  if (failures.length > 0) {
+    const preview = failures.slice(0, 3).join("; ");
+    const extra = failures.length > 3 ? ` (+${failures.length - 3} more)` : "";
+    state.sessionsError = `Cleared ${cleared} sessions; ${failures.length} failed: ${preview}${extra}`;
+  }
+  return cleared;
+}

@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSession, deleteSessionAndRefresh, type SessionsState } from "./sessions.ts";
+import {
+  deleteAllSessionsAndRefresh,
+  deleteSession,
+  deleteSessionAndRefresh,
+  type SessionsState,
+} from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -99,6 +104,71 @@ describe("deleteSession", () => {
     const deleted = await deleteSession(state, "agent:main:test");
 
     expect(deleted).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe("deleteAllSessionsAndRefresh", () => {
+  it("deletes normal sessions and resets protected main sessions", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [{ key: "agent:softdev:main" }, { key: "agent:softdev:session-1" }],
+        };
+      }
+      if (method === "sessions.delete") {
+        const key = (params as { key?: string } | undefined)?.key;
+        if (key === "agent:softdev:main") {
+          throw new Error("Cannot delete the main session");
+        }
+        return { ok: true };
+      }
+      if (method === "sessions.reset") {
+        return { ok: true };
+      }
+      return undefined;
+    });
+    const state = createState(request);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const cleared = await deleteAllSessionsAndRefresh(state);
+
+    expect(cleared).toBe(2);
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 10000,
+    });
+    expect(request).toHaveBeenCalledWith("sessions.delete", {
+      key: "agent:softdev:main",
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+    });
+    expect(request).toHaveBeenCalledWith("sessions.reset", {
+      key: "agent:softdev:main",
+      reason: "reset",
+    });
+    expect(request).toHaveBeenCalledWith("sessions.delete", {
+      key: "agent:softdev:session-1",
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+    });
+    expect(request).toHaveBeenLastCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    expect(state.sessionsError).toBeNull();
+    expect(state.sessionsLoading).toBe(false);
+  });
+
+  it("returns early when user cancels confirmation", async () => {
+    const request = vi.fn(async () => undefined);
+    const state = createState(request);
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    const cleared = await deleteAllSessionsAndRefresh(state);
+
+    expect(cleared).toBe(0);
     expect(request).not.toHaveBeenCalled();
   });
 });

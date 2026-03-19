@@ -32,7 +32,7 @@ function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCal
     endDate: "2026-02-16",
     mode: "specific",
     utcOffset: "UTC+5:30",
-    limit: 1000,
+    limit: 10000,
     includeContextWeight: true,
   });
   expect(request).toHaveBeenNthCalledWith(startCall + 1, "usage.cost", {
@@ -78,7 +78,7 @@ describe("usage controller date interpretation params", () => {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
       mode: "utc",
-      limit: 1000,
+      limit: 10000,
       includeContextWeight: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "usage.cost", {
@@ -132,7 +132,7 @@ describe("usage controller date interpretation params", () => {
     expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
-      limit: 1000,
+      limit: 10000,
       includeContextWeight: true,
     });
     expect(request).toHaveBeenNthCalledWith(4, "usage.cost", {
@@ -146,7 +146,7 @@ describe("usage controller date interpretation params", () => {
     expect(request).toHaveBeenNthCalledWith(5, "sessions.usage", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
-      limit: 1000,
+      limit: 10000,
       includeContextWeight: true,
     });
     expect(request).toHaveBeenNthCalledWith(6, "usage.cost", {

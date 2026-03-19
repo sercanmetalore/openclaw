@@ -3,6 +3,8 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { SessionsUsageResult, CostUsageSummary, SessionUsageTimeSeries } from "../types.ts";
 import type { SessionLogEntry } from "../views/usage.ts";
 
+export const USAGE_SESSIONS_LIMIT = 10000;
+
 export type UsageState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -206,7 +208,7 @@ export async function loadUsage(
           startDate,
           endDate,
           ...dateInterpretation,
-          limit: 1000, // Cap at 1000 sessions
+          limit: USAGE_SESSIONS_LIMIT,
           includeContextWeight: true,
         }),
         client.request("usage.cost", {

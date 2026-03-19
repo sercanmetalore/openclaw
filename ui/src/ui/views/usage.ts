@@ -737,7 +737,7 @@ export function renderUsage(props: UsageProps) {
         props.sessionsLimitReached
           ? html`
               <div class="callout warning" style="margin-top: 12px">
-                Showing first 1,000 sessions. Narrow date range for complete results.
+                Showing first 10,000 sessions. Narrow date range for complete results.
               </div>
             `
           : nothing

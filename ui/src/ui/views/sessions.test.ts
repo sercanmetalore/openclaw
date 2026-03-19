@@ -19,7 +19,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     result,
     error: null,
     activeMinutes: "",
-    limit: "120",
+    limit: "10000",
     includeGlobal: false,
     includeUnknown: false,
     basePath: "",
@@ -36,6 +36,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onPageSizeChange: () => undefined,
     onActionsOpenChange: () => undefined,
     onRefresh: () => undefined,
+    onDeleteAll: () => undefined,
     onPatch: () => undefined,
     onDelete: () => undefined,
   };

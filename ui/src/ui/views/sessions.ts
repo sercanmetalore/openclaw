@@ -32,6 +32,7 @@ export type SessionsProps = {
   onPageSizeChange: (size: number) => void;
   onActionsOpenChange: (key: string | null) => void;
   onRefresh: () => void;
+  onDeleteAll: () => void;
   onPatch: (
     key: string,
     patch: {
@@ -219,9 +220,18 @@ export function renderSessions(props: SessionsProps) {
           <div class="card-title">Sessions</div>
           <div class="card-sub">${props.result ? `Store: ${props.result.path}` : "Active session keys and per-session overrides."}</div>
         </div>
-        <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
-        </button>
+        <div class="row" style="gap: 8px;">
+          <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
+            ${props.loading ? "Loading…" : "Refresh"}
+          </button>
+          <button
+            class="btn danger"
+            ?disabled=${props.loading || (props.result?.sessions?.length ?? 0) === 0}
+            @click=${props.onDeleteAll}
+          >
+            Clear All Sessions
+          </button>
+        </div>
       </div>
 
       <div class="filters" style="margin-bottom: 12px;">

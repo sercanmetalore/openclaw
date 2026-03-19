@@ -1,7 +1,12 @@
 import { nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";
-import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
+import {
+  loadUsage,
+  loadSessionTimeSeries,
+  loadSessionLogs,
+  USAGE_SESSIONS_LIMIT,
+} from "./controllers/usage.ts";
 import { renderUsage } from "./views/usage.ts";
 
 // Module-scope debounce for usage date changes (avoids type-unsafe hacks on state object)
@@ -24,7 +29,7 @@ export function renderUsageTab(state: AppViewState) {
     startDate: state.usageStartDate,
     endDate: state.usageEndDate,
     sessions: state.usageResult?.sessions ?? [],
-    sessionsLimitReached: (state.usageResult?.sessions?.length ?? 0) >= 1000,
+    sessionsLimitReached: (state.usageResult?.sessions?.length ?? 0) >= USAGE_SESSIONS_LIMIT,
     totals: state.usageResult?.totals ?? null,
     aggregates: state.usageResult?.aggregates ?? null,
     costDaily: state.usageCostSummary?.daily ?? [],
