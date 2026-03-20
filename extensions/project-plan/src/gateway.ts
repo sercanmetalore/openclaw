@@ -502,4 +502,59 @@ export function registerGatewayMethods(
       req.respond(false, undefined, { message: String(err) });
     }
   });
+
+  // ── item.session ─────────────────────────────────────────────────────────
+  api.registerGatewayMethod("plugin.plan.item.session", async (req) => {
+    try {
+      const dir = await stateDir();
+      const { planId, itemId } = req.params as { planId: string; itemId: string };
+      const plan = await loadPlan(dir, planId);
+      if (!plan) { req.respond(false, undefined, { message: "Plan not found" }); return; }
+      const item = plan.items.find((i) => i.id === itemId);
+      if (!item) { req.respond(false, undefined, { message: "Item not found" }); return; }
+      req.respond(true, { messages: item.sessionOutput ?? [] });
+    } catch (err) {
+      req.respond(false, undefined, { message: String(err) });
+    }
+  });
+
+  // ── status.summary ───────────────────────────────────────────────────────
+  api.registerGatewayMethod("plugin.plan.status.summary", async (req) => {
+    try {
+      const dir = await stateDir();
+      const plans = await listPlans(dir);
+      if (!plans.length) {
+        req.respond(true, { summary: "No plans found." });
+        return;
+      }
+      const lines: string[] = [];
+      for (const plan of plans) {
+        const running = isRunning(plan.id);
+        const counts = buildCounts(plan.items);
+        const total = plan.items.length;
+        lines.push(`Plan: ${plan.name} [${running ? "RUNNING" : plan.status.toUpperCase()}]`);
+        lines.push(`Progress: ${counts["done"]}/${total} done, ${counts["failed"]} failed, ${counts["in progress"]} in progress`);
+        const epics = plan.items.filter((i) => i.type === "epic");
+        for (const epic of epics) {
+          lines.push(`\n▸ ${epic.title} [${epic.status}]`);
+          const tasks = plan.items.filter((i) => i.parentId === epic.id);
+          for (const task of tasks) {
+            lines.push(`  ├─ ${task.title} [${task.status}]`);
+            const subs = plan.items.filter((i) => i.parentId === task.id);
+            for (const s of subs) {
+              lines.push(`  │  └─ ${s.title} [${s.status}]`);
+            }
+          }
+        }
+        const orphans = plan.items.filter((i) => !i.parentId && i.type !== "epic");
+        for (const o of orphans) {
+          lines.push(`\n▸ ${o.title} [${o.status}]`);
+        }
+        lines.push("");
+      }
+      req.respond(true, { summary: lines.join("\n") });
+    } catch (err) {
+      req.respond(false, undefined, { message: String(err) });
+    }
+  });
 }

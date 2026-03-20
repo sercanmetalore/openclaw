@@ -111,6 +111,17 @@ tr:hover .item-actions{opacity:1}
 .account-row .acc-status{font-size:11px;color:#4ade80}
 .account-row .acc-status.no-token{color:var(--muted-2)}
 hr.divider{border:none;border-top:1px solid var(--border);margin:4px 0}
+.session-toggle{background:none;border:none;color:#7c9ef8;cursor:pointer;font-size:11px;padding:2px 6px;border-radius:3px}
+.session-toggle:hover{background:var(--panel-hover)}
+.session-output{background:var(--log-bg);border:1px solid var(--border);border-radius:6px;margin:6px 0 2px;padding:8px;max-height:320px;overflow-y:auto;font-family:monospace;font-size:11px}
+.session-msg{padding:3px 0;border-bottom:1px solid var(--panel-2)}
+.session-msg:last-child{border-bottom:none}
+.session-msg .s-role{font-weight:600;margin-right:6px;text-transform:uppercase;font-size:10px}
+.session-msg .s-role-assistant{color:#7c9ef8}
+.session-msg .s-role-tool{color:#f8b84a}
+.session-msg .s-role-system{color:#888}
+.session-msg .s-content{color:var(--text-soft);white-space:pre-wrap;word-break:break-word}
+.session-msg .s-tool-name{color:var(--muted-2);font-size:10px;margin-left:4px}
 </style>
 </head>
 <body>
@@ -304,6 +315,8 @@ let state = {
   allAccounts: [],       // public account list from /api/accounts
   refreshTimer: null,
   settingsDirty: false,
+  expandedItemId: null,
+  sessionCache: {},      // { [itemId]: messages[] }
 };
 
 // ── API ──────────────────────────────────────────────────────────────────────
@@ -335,6 +348,7 @@ function fmtDur(ms) {
   return s < 60 ? s+'s' : Math.floor(s/60)+'m '+(s%60)+'s';
 }
 function el(id) { return document.getElementById(id); }
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 let _errTimer;
 function showErr(msg) {
   clearTimeout(_errTimer);
@@ -548,6 +562,18 @@ function renderItems(plan) {
   if (!ordered.length) return '<div class="empty-state" style="padding:30px;color:#555">No items yet. Add one or import a file.</div>';
   const rows = ordered.map(({ item, depth }) => {
     const prefix = item.type.toUpperCase();
+    const hasSession = item.sessionOutput && item.sessionOutput.length > 0;
+    const isExpanded = state.expandedItemId === item.id;
+    const toggleBtn = hasSession
+      ? \`<button class="session-toggle btn-session-toggle" data-id="\${item.id}">\${isExpanded ? '▼ Hide Output' : '▶ Show Output'}</button>\`
+      : '';
+    let sessionHtml = '';
+    if (isExpanded && state.sessionCache[item.id]) {
+      const msgs = state.sessionCache[item.id];
+      sessionHtml = \`<div class="session-output">\${msgs.map(m =>
+        \`<div class="session-msg"><span class="s-role s-role-\${m.role}">\${m.role}</span>\${m.toolName ? \`<span class="s-tool-name">(\${escHtml(m.toolName)})</span>\` : ''}<div class="s-content">\${escHtml(m.content)}</div></div>\`
+      ).join('')}</div>\`;
+    }
     return \`<tr data-id="\${item.id}">
       <td>
         <div class="item-tree" style="padding-left:\${depth*24}px">
@@ -555,6 +581,8 @@ function renderItems(plan) {
           <div class="item-title-wrap">
             <span class="item-title">\${item.title}</span>
             \${item.description ? \`<span class="item-desc">\${item.description}</span>\` : ''}
+            \${toggleBtn}
+            \${sessionHtml}
           </div>
         </div>
       </td>
@@ -634,6 +662,22 @@ function bindItemActions(plan) {
     if (!confirm('Delete item?')) return;
     await apiFetch('DELETE', '/plans/'+plan.id+'/items/'+b.dataset.id).catch(e=>showErr(String(e)));
     await loadDetail(plan.id);
+  }));
+  document.querySelectorAll('.btn-session-toggle').forEach(b => b.addEventListener('click', async e => {
+    e.stopPropagation();
+    const itemId = b.dataset.id;
+    if (state.expandedItemId === itemId) {
+      state.expandedItemId = null;
+    } else {
+      state.expandedItemId = itemId;
+      if (!state.sessionCache[itemId]) {
+        try {
+          const data = await apiFetch('GET', '/plans/'+plan.id+'/items/'+itemId+'/session');
+          state.sessionCache[itemId] = data.messages || [];
+        } catch(err) { showErr(String(err)); return; }
+      }
+    }
+    renderDetail();
   }));
 }
 

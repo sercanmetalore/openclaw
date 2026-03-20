@@ -9,7 +9,7 @@ import {
   recomputeContainerStatuses,
 } from "./execution.js";
 import { createLog, loadPlan, savePlan } from "./store.js";
-import type { ProjectPlanItem, ProjectPlanPluginConfig, ProjectPlanRecord } from "./types.js";
+import type { ProjectPlanItem, ProjectPlanPluginConfig, ProjectPlanRecord, ProjectPlanSessionMessage } from "./types.js";
 
 const DEFAULT_ITEM_TIMEOUT_MINUTES = 30;
 
@@ -587,6 +587,35 @@ async function processItem(params: {
   } finally {
     runnerState.activeRun = undefined;
     runnerState.abortRequested = false;
+
+    // Capture session output for this item
+    try {
+      const transcript = await api.runtime.subagent.getSessionMessages({
+        sessionKey,
+        limit: 200,
+      });
+      const msgs = (transcript.messages ?? []) as Array<{
+        role?: string;
+        content?: unknown;
+        timestamp?: unknown;
+        toolName?: string;
+      }>;
+      const captured: ProjectPlanSessionMessage[] = [];
+      for (const m of msgs) {
+        if (!m.role || m.role === "user") continue;
+        let content = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
+        if (content.length > 3000) content = content.slice(0, 3000) + "…";
+        captured.push({
+          role: m.role as ProjectPlanSessionMessage["role"],
+          content,
+          toolName: m.toolName,
+          ts: typeof m.timestamp === "number" ? m.timestamp : Date.now(),
+        });
+      }
+      item.sessionOutput = captured.slice(-50);
+    } catch {
+      // Session capture is best-effort.
+    }
   }
 
   recomputeContainerStatuses(plan);

@@ -470,6 +470,44 @@ export function createHttpHandler(params: {
             await savePlan(stateDir, plan, opts);
             return ok(res), true;
           }
+
+          // GET /api/plans/:id/items/:itemId/session
+          if (method === "GET" && itemSub === "/session") {
+            const plan = await loadPlan(stateDir, planId);
+            if (!plan) return err(res, 404, "Plan not found"), true;
+            const item = plan.items.find((i) => i.id === itemId);
+            if (!item) return err(res, 404, "Item not found"), true;
+            return ok(res, { messages: item.sessionOutput ?? [] }), true;
+          }
+        }
+
+        // GET /api/plans/:id/status-summary
+        if (method === "GET" && sub === "/status-summary") {
+          const plan = await loadPlan(stateDir, planId);
+          if (!plan) return err(res, 404, "Plan not found"), true;
+          const running = isRunning(planId);
+          const counts = buildCounts(plan.items);
+          const total = plan.items.length;
+          const lines: string[] = [];
+          lines.push(`Plan: ${plan.name} [${running ? "RUNNING" : plan.status.toUpperCase()}]`);
+          lines.push(`Progress: ${counts["done"]}/${total} done, ${counts["failed"]} failed, ${counts["in progress"]} in progress`);
+          const epics = plan.items.filter((i) => i.type === "epic");
+          for (const epic of epics) {
+            lines.push(`\n▸ ${epic.title} [${epic.status}]`);
+            const tasks = plan.items.filter((i) => i.parentId === epic.id);
+            for (const task of tasks) {
+              lines.push(`  ├─ ${task.title} [${task.status}]`);
+              const subs = plan.items.filter((i) => i.parentId === task.id);
+              for (const s of subs) {
+                lines.push(`  │  └─ ${s.title} [${s.status}]`);
+              }
+            }
+          }
+          const orphans = plan.items.filter((i) => !i.parentId && i.type !== "epic");
+          for (const o of orphans) {
+            lines.push(`\n▸ ${o.title} [${o.status}]`);
+          }
+          return ok(res, { summary: lines.join("\n") }), true;
         }
       }
 

@@ -31,6 +31,13 @@ export type ProjectPlanSettings = {
   accountId?: string;
 };
 
+export type ProjectPlanSessionMessage = {
+  role: "user" | "assistant" | "tool" | "system";
+  content: string;
+  toolName?: string;
+  ts: number;
+};
+
 export type ProjectPlanItem = {
   id: string;
   type: ProjectPlanItemType;
@@ -44,6 +51,8 @@ export type ProjectPlanItem = {
   assignedAgentId?: string;
   /** Provider-side issue/work-item ID (stored but not exposed to UI). */
   externalId?: string;
+  /** Captured session output after item execution. */
+  sessionOutput?: ProjectPlanSessionMessage[];
 };
 
 export type ProjectPlanLogEntry = {
