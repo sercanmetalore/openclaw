@@ -1,0 +1,104 @@
+version: "3.9"
+
+services:
+  # ============================================================
+  # SearXNG — Meta Search Engine
+  # ============================================================
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "${SEARXNG_PORT:-8888}:8080"
+    volumes:
+      - ./config/settings.yml:/etc/searxng/settings.yml:ro
+      - ./config/limiter.toml:/etc/searxng/limiter.toml:ro
+      - searxng-data:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL:-http://localhost:8888}
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-change-me-to-a-strong-secret-key}
+      - SEARXNG_REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - searxng-net
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 512M
+          cpus: "0.5"
+
+  # ============================================================
+  # Redis — Caching & Rate Limiting Backend
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: searxng-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --appendonly yes
+      --appendfsync everysec
+    volumes:
+      - redis-data:/data
+    networks:
+      - searxng-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "1.0"
+
+  # ============================================================
+  # Caddy — Reverse Proxy (optional, production kullanımı için)
+  # ============================================================
+  caddy:
+    image: caddy:2-alpine
+    container_name: searxng-caddy
+    restart: unless-stopped
+    profiles:
+      - production
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - searxng-net
+    depends_on:
+      - searxng
+
+volumes:
+  searxng-data:
+  redis-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  searxng-net:
+    driver: bridge
