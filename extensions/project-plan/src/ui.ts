@@ -717,7 +717,11 @@ function bindItemActions(plan) {
         } catch(err) { showErr(String(err)); return; }
       }
     }
+    const wrap = el('tab-body')?.querySelector('.item-table-wrap');
+    const scrollBefore = wrap?.scrollTop || 0;
     renderTab();
+    const wrapAfter = el('tab-body')?.querySelector('.item-table-wrap');
+    if (wrapAfter) wrapAfter.scrollTop = scrollBefore;
   }));
 }
 
