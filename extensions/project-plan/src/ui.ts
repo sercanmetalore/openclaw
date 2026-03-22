@@ -152,13 +152,6 @@ hr.divider{border:none;border-top:1px solid var(--border);margin:4px 0}
       <div class="empty-state"><p style="color:#555">Select a plan or create a new one.</p></div>
     </div>
   </div>
-  <div class="chat-panel hidden" id="chat-panel">
-    <div class="chat-messages" id="chat-messages"></div>
-    <div class="chat-input-row">
-      <textarea id="chat-input" placeholder="Ask a question about this plan…" rows="1"></textarea>
-      <button class="primary" id="btn-chat-send">Send</button>
-    </div>
-  </div>
 </div>
 
 <!-- New Plan Modal -->
