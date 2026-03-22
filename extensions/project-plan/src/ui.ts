@@ -416,7 +416,9 @@ async function loadDetail(planId, attempt = 0, options = {}) {
     const samePlan = prevDetail?.plan?.id === planId;
     const prevTab = state.tab;
     const prevTabBody = el('tab-body');
+    const prevItemTableWrap = prevTabBody?.querySelector('.item-table-wrap');
     const prevTabScrollTop = prevTabBody?.scrollTop || 0;
+    const prevItemScrollTop = prevItemTableWrap?.scrollTop || 0;
     const prevRunning = !!prevDetail?.dashboard?.running;
 
     const data = await apiFetch('GET', '/plans/' + planId);
@@ -449,12 +451,16 @@ async function loadDetail(planId, attempt = 0, options = {}) {
       const nextTabBody = el('tab-body');
       if (nextTabBody && prevTab === state.tab) {
         nextTabBody.scrollTop = prevTabScrollTop;
+        const nextItemTableWrap = nextTabBody.querySelector('.item-table-wrap');
+        if (nextItemTableWrap) nextItemTableWrap.scrollTop = prevItemScrollTop;
       }
     } else {
       renderContent();
       const nextTabBody = el('tab-body');
       if (source === 'auto' && nextTabBody && prevTab === state.tab) {
         nextTabBody.scrollTop = prevTabScrollTop;
+        const nextItemTableWrap = nextTabBody.querySelector('.item-table-wrap');
+        if (nextItemTableWrap) nextItemTableWrap.scrollTop = prevItemScrollTop;
       }
     }
 
