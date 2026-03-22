@@ -70,8 +70,6 @@ curl "http://localhost:8888/search?q=test&format=json" | jq .
 ## CLI Kullanımı
 
 ```bash
-cd scripts
-
 # Basit arama
 python cli.py search "LangGraph multi-agent architecture"
 
@@ -229,15 +227,13 @@ searxng-deepsearch/
 ├── docker-compose.yml          # Docker servisleri
 ├── manage.sh                   # Yönetim scripti
 ├── .env                        # Ortam değişkenleri
-├── config/
-│   ├── settings.yml            # SearXNG ana yapılandırma (80+ motor)
-│   ├── limiter.toml            # Rate limiting (API için gevşetilmiş)
-│   └── Caddyfile               # Reverse proxy (production)
-├── scripts/
-│   ├── requirements.txt        # Python bağımlılıkları
-│   ├── deepsearch.py           # Core deep search engine
-│   ├── cli.py                  # CLI aracı
-│   └── agent_integration.py    # LangChain/OpenAI/Anthropic/MCP entegrasyonu
+├── settings.yml                # SearXNG ana yapılandırma (80+ motor)
+├── limiter.toml                # Rate limiting (API için gevşetilmiş)
+├── Caddyfile                   # Reverse proxy (production)
+├── requirements.txt            # Python bağımlılıkları
+├── deepsearch.py               # Core deep search engine
+├── cli.py                      # CLI aracı
+└── agent_integration.py        # LangChain/OpenAI/Anthropic/MCP entegrasyonu
 └── README.md
 ```
 

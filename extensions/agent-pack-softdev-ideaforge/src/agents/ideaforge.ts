@@ -390,7 +390,7 @@ Bu ajan **orchestrator** modda çalışır: araştırma ve analiz görevlerini s
 
 1. **Altyapı kontrolü:**
    - SearXNG arama motorunun erişilebilir olduğunu doğrula: \`curl -s http://localhost:8888/healthz\`
-   - Eğer SearXNG erişilemiyorsa kullanıcıyı uyar: "SearXNG Docker container çalışmıyor. İnternet araştırması için \`docker compose -f docker-compose.searxng.yml up -d\` komutunu çalıştırın."
+  - Eğer SearXNG erişilemiyorsa kullanıcıyı uyar: "SearXNG Docker container çalışmıyor. İnternet araştırması için \`cd /home/adige/openclaw_dev/searxngfiles && docker compose up -d\` komutunu çalıştırın."
     - \`$HOME/\` dizininin yazılabilir olduğunu doğrula
 
 2. **Workspace kontrolü:**

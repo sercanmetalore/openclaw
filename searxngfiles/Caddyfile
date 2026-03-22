@@ -1,0 +1,15 @@
+http://{$SEARXNG_HOSTNAME:localhost} {
+	encode gzip zstd
+
+	@health {
+		path /healthz
+	}
+	handle @health {
+		respond 200
+	}
+
+	reverse_proxy searxng:8080 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+	}
+}

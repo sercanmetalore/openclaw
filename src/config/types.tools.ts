@@ -457,8 +457,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "firecrawl", "gemini", "grok", "kimi", or "perplexity"). */
-      provider?: "brave" | "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity";
+      /** Search provider ("brave", "firecrawl", "gemini", "grok", "kimi", "perplexity", or "searxng"). */
+      provider?: "brave" | "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity" | "searxng";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
@@ -503,6 +503,11 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** Model to use (defaults to "moonshot-v1-128k"). */
         model?: string;
+      };
+      /** SearXNG-specific configuration (used when provider="searxng"). */
+      searxng?: {
+        /** Base URL for SearXNG (defaults to "http://localhost:8888"). */
+        baseUrl?: string;
       };
       /** Perplexity-specific configuration (used when provider="perplexity"). */
       perplexity?: {

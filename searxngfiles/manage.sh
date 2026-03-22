@@ -58,9 +58,9 @@ EOF
     fi
 
     # Python ortamı
-    if command -v python3 &> /dev/null; then
+    if command -v python3 &> /dev/null && [ -f requirements.txt ]; then
         log "Python bağımlılıkları kuruluyor..."
-        python3 -m pip install -r scripts/requirements.txt --quiet 2>/dev/null || \
+        python3 -m pip install -r requirements.txt --quiet 2>/dev/null || \
             warn "Python bağımlılıkları kurulamadı (opsiyonel)"
     fi
 
@@ -181,7 +181,7 @@ if len(engines) > 15:
     # Python CLI testi
     if command -v python3 &> /dev/null && python3 -c "import deepsearch" 2>/dev/null; then
         echo -e "\n${CYAN}── Python CLI Testi ──${NC}"
-        cd scripts && python3 cli.py health && cd ..
+        python3 cli.py health
     fi
 
     echo -e "\n${GREEN}Test tamamlandı.${NC}"

@@ -124,7 +124,7 @@ export function resolveWebSearchProviderId(params: {
     }
   }
 
-  return providers[0]?.id ?? "brave";
+  return providers.find((provider) => provider.id === "brave")?.id ?? providers[0]?.id ?? "brave";
 }
 
 export function resolveWebSearchDefinition(
