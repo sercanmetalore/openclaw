@@ -33,7 +33,7 @@ select option{background:var(--panel-2)}
 .topbar{display:flex;align-items:center;gap:12px;padding:10px 20px;background:var(--panel);border-bottom:1px solid var(--border);flex-shrink:0}
 .topbar h1{font-size:16px;font-weight:600}
 .topbar .spacer{flex:1}
-.main{display:flex;flex:1;overflow:hidden;height:calc(100vh - 45px)}
+.main{display:flex;flex:1;overflow:hidden}
 .sidebar{width:240px;border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
 .sidebar-header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--border);font-size:11px;color:var(--muted-2);text-transform:uppercase;letter-spacing:.05em}
 .plan-list{flex:1;overflow-y:auto;padding:6px}
@@ -100,6 +100,15 @@ tr:hover .item-actions{opacity:1}
 .spinner{display:inline-block;width:13px;height:13px;border:2px solid #333;border-top-color:#7c9ef8;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:5px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .hidden{display:none!important}
+.chat-panel{display:flex;flex-direction:column;border-top:1px solid var(--border);height:280px;flex-shrink:0;background:var(--panel)}
+.chat-messages{flex:1;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:6px}
+.chat-msg{padding:6px 10px;border-radius:6px;font-size:13px;line-height:1.5;max-width:85%;word-break:break-word;white-space:pre-wrap}
+.chat-msg.user{background:var(--panel-active);color:var(--text-strong);align-self:flex-end}
+.chat-msg.assistant{background:var(--panel-2);color:var(--text-soft);align-self:flex-start}
+.chat-msg.thinking{color:var(--muted);font-style:italic}
+.chat-input-row{display:flex;gap:8px;padding:8px 14px;border-top:1px solid var(--border);align-items:flex-end}
+.chat-input-row textarea{flex:1;min-height:36px;max-height:100px;resize:none;font-size:13px;padding:8px 10px}
+.chat-input-row button{flex-shrink:0;height:36px}
 .detail-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .detail-title{font-size:17px;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .action-bar{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
@@ -141,6 +150,13 @@ hr.divider{border:none;border-top:1px solid var(--border);margin:4px 0}
     </div>
     <div class="content" id="content">
       <div class="empty-state"><p style="color:#555">Select a plan or create a new one.</p></div>
+    </div>
+  </div>
+  <div class="chat-panel hidden" id="chat-panel">
+    <div class="chat-messages" id="chat-messages"></div>
+    <div class="chat-input-row">
+      <textarea id="chat-input" placeholder="Ask a question about this plan…" rows="1"></textarea>
+      <button class="primary" id="btn-chat-send">Send</button>
     </div>
   </div>
 </div>
@@ -490,6 +506,7 @@ function renderContent() {
   const c = el('content');
   if (!state.detail) {
     c.innerHTML = '<div class="empty-state"><p style="color:#555">Select a plan or create a new one.</p></div>';
+    updateChatVisibility();
     return;
   }
   const { plan, dashboard } = state.detail;
@@ -538,6 +555,7 @@ function renderContent() {
     await loadPlans(); renderContent();
   });
   renderTab();
+  updateChatVisibility();
 }
 
 function renderTab() {
@@ -1091,6 +1109,80 @@ el('btn-fb-cancel').addEventListener('click', () => el('modal-fsbrowse').classLi
 el('btn-fb-select').addEventListener('click', () => {
   if (el('s-proj-path')) el('s-proj-path').value = fbState.path;
   el('modal-fsbrowse').classList.add('hidden');
+});
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+let chatMessages = [];
+
+function updateChatVisibility() {
+  const panel = el('chat-panel');
+  if (state.selectedId) panel.classList.remove('hidden');
+  else panel.classList.add('hidden');
+}
+
+function renderChatMessages() {
+  const container = el('chat-messages');
+  container.innerHTML = chatMessages.map(m =>
+    \`<div class="chat-msg \${m.role}">\${escHtml(m.content)}</div>\`
+  ).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+function addChatMessage(role, content) {
+  chatMessages.push({role, content});
+  renderChatMessages();
+}
+
+async function sendChatMessage() {
+  const input = el('chat-input');
+  const msg = input.value.trim();
+  if (!msg || !state.selectedId) return;
+
+  input.value = '';
+  input.style.height = 'auto';
+  addChatMessage('user', msg);
+
+  const thinkingIdx = chatMessages.length;
+  chatMessages.push({role:'assistant thinking', content:'Thinking…'});
+  renderChatMessages();
+
+  const btn = el('btn-chat-send');
+  btn.disabled = true;
+
+  try {
+    const data = await apiFetch('POST', '/plans/' + state.selectedId + '/ask', { message: msg });
+    chatMessages.splice(thinkingIdx, 1);
+    addChatMessage('assistant', data.reply || '(No response)');
+  } catch(e) {
+    chatMessages.splice(thinkingIdx, 1);
+    addChatMessage('assistant', 'Error: ' + String(e));
+  } finally {
+    btn.disabled = false;
+    el('chat-input').focus();
+  }
+}
+
+el('btn-chat-send').addEventListener('click', sendChatMessage);
+el('chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendChatMessage();
+  }
+});
+
+el('chat-input').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'e' || e.key === 'E') {
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (!state.selectedId) return;
+    e.preventDefault();
+    el('chat-input').focus();
+  }
 });
 
 // ── Modal helpers ─────────────────────────────────────────────────────────────

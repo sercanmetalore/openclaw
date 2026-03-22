@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
@@ -53,6 +56,74 @@ import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+// ── Plan context helpers ──────────────────────────────────────────────────────
+
+type PlanContextRecord = {
+  id: string;
+  name: string;
+  description?: string;
+  status: string;
+  settings: { projectPath?: string };
+  items: Array<{
+    id: string;
+    type: string;
+    title: string;
+    description?: string;
+    status: string;
+    parentId?: string;
+  }>;
+};
+
+async function loadPlanContext(planId: string): Promise<PlanContextRecord | null> {
+  try {
+    const stateDir = resolveStateDir();
+    const planPath = path.join(stateDir, "plugins", "project-plan", "plans", `${planId}.json`);
+    const raw = await fs.readFile(planPath, "utf8");
+    return JSON.parse(raw) as PlanContextRecord;
+  } catch {
+    return null;
+  }
+}
+
+function formatPlanContextForSystemPrompt(plan: PlanContextRecord): string {
+  const lines: string[] = [
+    `## Active Project Plan: ${plan.name}`,
+    "",
+  ];
+  if (plan.description) {
+    lines.push(plan.description, "");
+  }
+  lines.push(`Status: ${plan.status}`);
+  if (plan.settings.projectPath) {
+    lines.push(`Project path: ${plan.settings.projectPath}`);
+  }
+  lines.push("", "### Plan Items", "");
+
+  // Group items: top-level first, then children under parents
+  const topLevel = plan.items.filter((i) => !i.parentId);
+  for (const item of topLevel) {
+    const statusIcon = item.status === "done" ? "✅" : item.status === "in progress" ? "🔄" : item.status === "blocked" ? "🚫" : item.status === "failed" ? "❌" : "⬜";
+    lines.push(`- ${statusIcon} [${item.type}] ${item.title} (${item.status})`);
+    if (item.description) {
+      lines.push(`  ${item.description}`);
+    }
+    const children = plan.items.filter((c) => c.parentId === item.id);
+    for (const child of children) {
+      const childIcon = child.status === "done" ? "✅" : child.status === "in progress" ? "🔄" : child.status === "blocked" ? "🚫" : child.status === "failed" ? "❌" : "⬜";
+      lines.push(`  - ${childIcon} [${child.type}] ${child.title} (${child.status})`);
+      if (child.description) {
+        lines.push(`    ${child.description}`);
+      }
+    }
+  }
+
+  lines.push(
+    "",
+    "Use this plan context to understand the project scope and current progress when answering questions.",
+  );
+  return lines.join("\n");
+}
 
 function buildResetSessionNoticeText(params: {
   provider: string;
@@ -268,11 +339,21 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
+  // Load plan context if /plan-context directive was present in the message.
+  let planContextPrompt = "";
+  if (ctx.PlanContextId) {
+    const plan = await loadPlanContext(ctx.PlanContextId);
+    if (plan) {
+      planContextPrompt = formatPlanContextForSystemPrompt(plan);
+    }
+  }
+
   const extraSystemPromptParts = [
     inboundMetaPrompt,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
+    planContextPrompt,
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).

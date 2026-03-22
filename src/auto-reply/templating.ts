@@ -179,6 +179,8 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
+  /** Plan context id from /plan-context {planId} directive. When set, the plan is loaded and injected into extraSystemPrompt. */
+  PlanContextId?: string;
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {

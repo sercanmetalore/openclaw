@@ -3,6 +3,7 @@ import firecrawlPlugin from "../../extensions/firecrawl/index.js";
 import googlePlugin from "../../extensions/google/index.js";
 import moonshotPlugin from "../../extensions/moonshot/index.js";
 import perplexityPlugin from "../../extensions/perplexity/index.js";
+import searxngPlugin from "../../extensions/searxng/index.js";
 import xaiPlugin from "../../extensions/xai/index.js";
 import {
   withBundledPluginAllowlistCompat,
@@ -21,6 +22,7 @@ type RegistrablePlugin = {
 };
 
 const BUNDLED_WEB_SEARCH_PLUGINS: readonly RegistrablePlugin[] = [
+  searxngPlugin,
   bravePlugin,
   firecrawlPlugin,
   googlePlugin,

@@ -26,7 +26,7 @@ import {
   type UploadPayload,
 } from "./store.js";
 import { recomputeContainerStatuses } from "./execution.js";
-import { isRunning, requestStop, startPlanExecution } from "./service.js";
+import { askPlanQuestion, isRunning, requestStop, startPlanExecution } from "./service.js";
 import { syncFromProvider } from "./providers/index.js";
 import { convertFileToItems } from "./llm-convert.js";
 import { renderUI } from "./ui.js";
@@ -479,6 +479,20 @@ export function createHttpHandler(params: {
             if (!item) return err(res, 404, "Item not found"), true;
             return ok(res, { messages: item.sessionOutput ?? [] }), true;
           }
+        }
+
+        // POST /api/plans/:id/ask
+        if (method === "POST" && sub === "/ask") {
+          const body = (await readBody(req)) as { message: string };
+          if (!body.message?.trim()) return err(res, 400, "Message is required"), true;
+          const dir = await api.runtime.state.resolveStateDir();
+          const result = await askPlanQuestion({
+            planId,
+            message: body.message.trim(),
+            stateDir: dir,
+            api,
+          });
+          return ok(res, result), true;
         }
 
         // GET /api/plans/:id/status-summary

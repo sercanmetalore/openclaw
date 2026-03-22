@@ -959,6 +959,52 @@ function buildSystemPrompt(projectPath: string): string {
   ].join("\n");
 }
 
+// ── Ask plan question ─────────────────────────────────────────────────────────
+
+export async function askPlanQuestion(params: {
+  planId: string;
+  message: string;
+  stateDir: string;
+  api: OpenClawPluginApi;
+}): Promise<{ reply: string }> {
+  const { planId, message, stateDir, api } = params;
+  const plan = await loadPlan(stateDir, planId);
+  if (!plan) throw new Error("Plan not found");
+
+  const sessionKey = `plan-chat:${planId}`;
+  const fullMessage = `/plan-context ${planId} ${message}`;
+
+  const { runId } = await api.runtime.subagent.run({
+    sessionKey,
+    idempotencyKey: crypto.randomUUID(),
+    message: fullMessage,
+  });
+
+  const result = await api.runtime.subagent.waitForRun({ runId, timeoutMs: 120_000 });
+
+  // Extract assistant reply from session
+  const transcript = await api.runtime.subagent.getSessionMessages({
+    sessionKey,
+    limit: 50,
+  });
+  const msgs = (transcript.messages ?? []) as Array<{
+    role?: string;
+    content?: unknown;
+  }>;
+
+  // Find the last assistant message
+  let reply = "";
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role === "assistant" && m.content) {
+      reply = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      break;
+    }
+  }
+
+  return { reply: reply || "(No response)" };
+}
+
 // ── OpenClaw service definition ───────────────────────────────────────────────
 
 export function createProjectPlanService(api: OpenClawPluginApi) {

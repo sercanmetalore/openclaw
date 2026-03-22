@@ -1261,14 +1261,24 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
-      const trimmedMessage = parsedMessage.trim();
+      // Extract /plan-context {planId} directive from the message (if present).
+      // The directive is stripped from the message body so it never reaches the agent as text.
+      const planContextMatch = parsedMessage.match(/^\/plan-context\s+(\S+)\s*\n?/m);
+      const planContextId = planContextMatch?.[1] ?? undefined;
+      const parsedMessageClean = planContextMatch
+        ? parsedMessage.replace(planContextMatch[0], "").trim()
+        : parsedMessage;
+
+      const trimmedMessage = parsedMessageClean.trim();
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
-      const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
+      const commandBody = injectThinking
+        ? `/think ${p.thinking} ${parsedMessageClean}`
+        : parsedMessageClean;
       const messageForAgent = systemProvenanceReceipt
-        ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
-        : parsedMessage;
+        ? [systemProvenanceReceipt, parsedMessageClean].filter(Boolean).join("\n\n")
+        : parsedMessageClean;
       const clientInfo = client?.connect?.client;
       const {
         originatingChannel,
@@ -1311,6 +1321,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes,
+        PlanContextId: planContextId,
       };
 
       const agentId = resolveSessionAgentId({
