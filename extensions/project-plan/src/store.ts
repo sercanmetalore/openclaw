@@ -39,6 +39,114 @@ async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
 }
 
+function normalizePlanSource(raw: unknown): ProjectPlanSource {
+  return raw === "github" ||
+    raw === "gitlab" ||
+    raw === "azuredevops" ||
+    raw === "jira" ||
+    raw === "local"
+    ? raw
+    : "local";
+}
+
+function normalizePlanStatus(raw: unknown): ProjectPlanStatus {
+  return raw === "to do" ||
+    raw === "in progress" ||
+    raw === "blocked" ||
+    raw === "done" ||
+    raw === "failed" ||
+    raw === "cancelled"
+    ? raw
+    : "to do";
+}
+
+function toFiniteTimestamp(raw: unknown, fallback: number): number {
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : fallback;
+}
+
+function toOptionalFiniteTimestamp(raw: unknown): number | undefined {
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+}
+
+function normalizeLoadedPlan(raw: unknown): ProjectPlanRecord | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const input = raw as Partial<ProjectPlanRecord>;
+  const id = typeof input.id === "string" ? input.id.trim() : "";
+  const name = typeof input.name === "string" ? input.name.trim() : "";
+  if (!id || !name) {
+    return null;
+  }
+
+  const now = Date.now();
+  const createdAt = toFiniteTimestamp(input.createdAt, now);
+  const updatedAt = toFiniteTimestamp(input.updatedAt, createdAt);
+  const settingsRaw =
+    input.settings && typeof input.settings === "object"
+      ? (input.settings as Partial<ProjectPlanRecord["settings"]>)
+      : {};
+
+  return {
+    id,
+    name,
+    description: typeof input.description === "string" ? input.description : undefined,
+    status: normalizePlanStatus(input.status),
+    createdAt,
+    updatedAt,
+    settings: {
+      source: normalizePlanSource(settingsRaw.source),
+      providerProjectId:
+        typeof settingsRaw.providerProjectId === "string"
+          ? settingsRaw.providerProjectId
+          : undefined,
+      providerPlanId:
+        typeof settingsRaw.providerPlanId === "string" ? settingsRaw.providerPlanId : undefined,
+      defaultAgentId:
+        typeof settingsRaw.defaultAgentId === "string" ? settingsRaw.defaultAgentId : undefined,
+      syncMode: settingsRaw.syncMode === "pull" ? "pull" : "manual",
+      itemScopedSessions: settingsRaw.itemScopedSessions !== false,
+      projectPath:
+        typeof settingsRaw.projectPath === "string" ? settingsRaw.projectPath : undefined,
+      accountId: typeof settingsRaw.accountId === "string" ? settingsRaw.accountId : undefined,
+    },
+    execution:
+      input.execution && typeof input.execution === "object"
+        ? {
+            running: Boolean(input.execution.running),
+            startedAt: toOptionalFiniteTimestamp(input.execution.startedAt),
+            lastStartedAt: toOptionalFiniteTimestamp(input.execution.lastStartedAt),
+            lastCompletedAt: toOptionalFiniteTimestamp(input.execution.lastCompletedAt),
+            currentItemId:
+              typeof input.execution.currentItemId === "string"
+                ? input.execution.currentItemId
+                : undefined,
+          }
+        : { running: false },
+    metrics:
+      input.metrics && typeof input.metrics === "object"
+        ? {
+            runCount:
+              typeof input.metrics.runCount === "number" && Number.isFinite(input.metrics.runCount)
+                ? input.metrics.runCount
+                : 0,
+            tokenSpent:
+              typeof input.metrics.tokenSpent === "number" &&
+              Number.isFinite(input.metrics.tokenSpent)
+                ? input.metrics.tokenSpent
+                : 0,
+            durationMs:
+              typeof input.metrics.durationMs === "number" &&
+              Number.isFinite(input.metrics.durationMs)
+                ? input.metrics.durationMs
+                : 0,
+          }
+        : { runCount: 0, tokenSpent: 0, durationMs: 0 },
+    items: Array.isArray(input.items) ? (input.items as ProjectPlanRecord["items"]) : [],
+    logs: Array.isArray(input.logs) ? (input.logs as ProjectPlanRecord["logs"]) : [],
+  };
+}
+
 // ── Plan CRUD ─────────────────────────────────────────────────────────────────
 
 export async function listPlans(stateDir: string): Promise<ProjectPlanRecord[]> {
@@ -55,7 +163,10 @@ export async function listPlans(stateDir: string): Promise<ProjectPlanRecord[]> 
     if (!file.endsWith(".json")) continue;
     try {
       const raw = await fs.readFile(path.join(dir, file), "utf8");
-      plans.push(JSON.parse(raw) as ProjectPlanRecord);
+      const parsed = normalizeLoadedPlan(JSON.parse(raw));
+      if (parsed) {
+        plans.push(parsed);
+      }
     } catch {
       // Skip corrupt files.
     }
@@ -63,10 +174,13 @@ export async function listPlans(stateDir: string): Promise<ProjectPlanRecord[]> 
   return plans.sort((a, b) => a.createdAt - b.createdAt);
 }
 
-export async function loadPlan(stateDir: string, planId: string): Promise<ProjectPlanRecord | null> {
+export async function loadPlan(
+  stateDir: string,
+  planId: string,
+): Promise<ProjectPlanRecord | null> {
   try {
     const raw = await fs.readFile(planFilePath(stateDir, planId), "utf8");
-    return JSON.parse(raw) as ProjectPlanRecord;
+    return normalizeLoadedPlan(JSON.parse(raw));
   } catch {
     return null;
   }
@@ -193,7 +307,10 @@ async function loadIntegrations(stateDir: string): Promise<StoredIntegration[]> 
   }
 }
 
-async function saveIntegrations(stateDir: string, integrations: StoredIntegration[]): Promise<void> {
+async function saveIntegrations(
+  stateDir: string,
+  integrations: StoredIntegration[],
+): Promise<void> {
   const dir = pluginDir(stateDir);
   await ensureDir(dir);
   await fs.writeFile(
@@ -219,10 +336,13 @@ export async function getIntegrations(stateDir: string): Promise<{
       settings: s ? { ...s.settings, enabled: s.enabled } : undefined,
     };
   });
-  const availableSources: ProjectPlanSource[] = ["local", ...ids.filter((id) => {
-    const s = byId.get(id);
-    return s?.enabled && s.encryptedToken;
-  })];
+  const availableSources: ProjectPlanSource[] = [
+    "local",
+    ...ids.filter((id) => {
+      const s = byId.get(id);
+      return s?.enabled && s.encryptedToken;
+    }),
+  ];
   return { integrations, availableSources };
 }
 
@@ -233,7 +353,10 @@ export async function saveIntegrationsConfig(
   const key = await loadOrCreateKey(stateDir);
   const existing = await loadIntegrations(stateDir);
   const byId = new Map(existing.map((i) => [i.id, i]));
-  for (const [id, settings] of Object.entries(draft) as [ProjectPlanIntegrationId, ProjectPlanIntegrationSettings][]) {
+  for (const [id, settings] of Object.entries(draft) as [
+    ProjectPlanIntegrationId,
+    ProjectPlanIntegrationSettings,
+  ][]) {
     const { token, ...rest } = settings;
     const prev = byId.get(id);
     const entry: StoredIntegration = {
@@ -291,7 +414,13 @@ export async function saveAccounts(stateDir: string, accounts: StoredAccount[]):
 /** Map StoredAccount list to PlanAccount list (tokens hidden). */
 export function toPublicAccounts(
   accounts: StoredAccount[],
-): Array<{ id: string; name: string; provider: ProjectPlanIntegrationId; enabled: boolean; settings: ProjectPlanIntegrationSettings }> {
+): Array<{
+  id: string;
+  name: string;
+  provider: ProjectPlanIntegrationId;
+  enabled: boolean;
+  settings: ProjectPlanIntegrationSettings;
+}> {
   return accounts.map(({ encryptedToken: _, ...a }) => ({
     ...a,
     settings: { ...a.settings, token: undefined },
@@ -301,7 +430,13 @@ export function toPublicAccounts(
 /** Upsert a single account (encrypts token if provided). */
 export async function upsertAccount(
   stateDir: string,
-  draft: { id?: string; name: string; provider: ProjectPlanIntegrationId; enabled: boolean; settings: ProjectPlanIntegrationSettings },
+  draft: {
+    id?: string;
+    name: string;
+    provider: ProjectPlanIntegrationId;
+    enabled: boolean;
+    settings: ProjectPlanIntegrationSettings;
+  },
 ): Promise<StoredAccount> {
   const key = await loadOrCreateKey(stateDir);
   const existing = await loadAccounts(stateDir);
@@ -331,7 +466,10 @@ export async function deleteAccount(stateDir: string, accountId: string): Promis
 }
 
 /** Resolve the plaintext token for a specific account. */
-export async function resolveAccountToken(stateDir: string, accountId: string): Promise<string | null> {
+export async function resolveAccountToken(
+  stateDir: string,
+  accountId: string,
+): Promise<string | null> {
   const accounts = await loadAccounts(stateDir);
   const account = accounts.find((a) => a.id === accountId);
   if (!account?.encryptedToken) return null;
@@ -370,8 +508,8 @@ const UPLOAD_TYPE_ALIASES: Record<string, ProjectPlanItemType> = {
   subtasks: "subtask",
   "sub-task": "subtask",
   "sub-tasks": "subtask",
-  "sub_task": "subtask",
-  "sub_tasks": "subtask",
+  sub_task: "subtask",
+  sub_tasks: "subtask",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -508,10 +646,7 @@ function normalizeUploadItemType(
   return normalized;
 }
 
-export function importItemsFromPayload(
-  payload: UploadPayload,
-  startOrder = 0,
-): ProjectPlanItem[] {
+export function importItemsFromPayload(payload: UploadPayload, startOrder = 0): ProjectPlanItem[] {
   // Accept both {"items":[...]} and [...] formats.
   const rawItems: UploadItem[] = Array.isArray(payload)
     ? payload
@@ -573,7 +708,12 @@ export function importItemsFromPayload(
 
 export function buildCounts(items: ProjectPlanItem[]): Record<ProjectPlanStatus, number> {
   const counts: Record<ProjectPlanStatus, number> = {
-    "to do": 0, "in progress": 0, blocked: 0, done: 0, failed: 0, cancelled: 0,
+    "to do": 0,
+    "in progress": 0,
+    blocked: 0,
+    done: 0,
+    failed: 0,
+    cancelled: 0,
   };
   for (const item of items) {
     counts[item.status] = (counts[item.status] ?? 0) + 1;
@@ -583,8 +723,8 @@ export function buildCounts(items: ProjectPlanItem[]): Record<ProjectPlanStatus,
 
 // ── Plugin-config helper ──────────────────────────────────────────────────────
 
-export function getPluginConfigOpts(
-  pluginConfig: ProjectPlanPluginConfig,
-): { maxLogEntries?: number } {
+export function getPluginConfigOpts(pluginConfig: ProjectPlanPluginConfig): {
+  maxLogEntries?: number;
+} {
   return { maxLogEntries: pluginConfig.maxLogEntries };
 }
