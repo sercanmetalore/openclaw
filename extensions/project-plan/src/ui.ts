@@ -11,7 +11,8 @@ export function renderUI(): string {
 html{--bg:#0f0f10;--fg:#e2e2e5;--muted:#888;--muted-2:#666;--border:#2a2a30;--border-2:#3a3a42;--panel:#16161a;--panel-2:#1e1e24;--panel-hover:#2a2a30;--panel-hover-2:#333340;--panel-active:#1e2a4a;--text-strong:#d0d0da;--text-soft:#c8c8d0;--empty:#555;--input-focus:#5a7ef8;--error-bg:#2a0f0f;--error-border:#5a1a1a;--error-text:#f87171;--log-bg:#1e1e24;color-scheme:dark}
 html[data-theme-mode="light"]{--bg:#f5f7fb;--fg:#1f2937;--muted:#64748b;--muted-2:#475569;--border:#dbe3ef;--border-2:#cbd5e1;--panel:#ffffff;--panel-2:#f8fafc;--panel-hover:#edf2f7;--panel-hover-2:#e2e8f0;--panel-active:#dbeafe;--text-strong:#0f172a;--text-soft:#1f2937;--empty:#64748b;--input-focus:#2563eb;--error-bg:#fef2f2;--error-border:#fecaca;--error-text:#b91c1c;--log-bg:#f1f5f9;color-scheme:light}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;font-size:14px;background:var(--bg);color:var(--fg);min-height:100vh;display:flex;flex-direction:column}
+body{font-family:system-ui,sans-serif;font-size:14px;background:var(--bg);color:var(--fg);height:100vh;overflow:hidden}
+#app{display:flex;flex-direction:column;height:100%;min-height:0}
 button{cursor:pointer;font-size:13px;border:none;border-radius:6px;padding:6px 14px;transition:background .15s}
 button.primary{background:#3b5ef0;color:#fff} button.primary:hover{background:#2f4fdf}
 button.danger{background:#8b1a1a;color:#fff} button.danger:hover{background:#a02020}
@@ -55,6 +56,7 @@ select option{background:var(--panel-2)}
 .detail-fixed > *{margin-bottom:14px}
 .detail-fixed > *:last-child{margin-bottom:0}
 .tab-body{flex:1;min-height:0;overflow-y:auto;padding-right:2px}
+.tab-body.items-tab{display:flex;flex-direction:column;overflow:hidden}
 .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;text-transform:uppercase}
 .badge-todo{background:var(--panel-hover);color:var(--muted)}
 .badge-inprogress{background:#1a3a5c;color:#7cb9f8}
@@ -72,6 +74,7 @@ select option{background:var(--panel-2)}
 .item-table th{text-align:left;font-size:11px;color:var(--muted-2);padding:5px 8px;border-bottom:1px solid var(--border);text-transform:uppercase;white-space:nowrap}
 .item-table td{padding:7px 8px;border-bottom:1px solid var(--panel-2);vertical-align:middle}
 .item-table tr:hover td{background:var(--panel-2)}
+.item-table-wrap{flex:1;min-height:0;overflow:auto}
 .item-tree{display:flex;align-items:flex-start;gap:8px}
 .item-tree-prefix{font-size:11px;font-weight:700;letter-spacing:.08em;color:#7c9ef8;min-width:66px;flex-shrink:0}
 .item-title-wrap{display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -326,6 +329,8 @@ let state = {
   settingsDirty: false,
   expandedItemId: null,
   sessionCache: {},      // { [itemId]: messages[] }
+  listRetryTimer: null,
+  listRetryDelayMs: 3000,
 };
 
 // ── API ──────────────────────────────────────────────────────────────────────
@@ -376,6 +381,11 @@ function showErr(msg) {
 async function loadPlans() {
   try {
     const data = await apiFetch('GET', '/plans');
+    if (state.listRetryTimer) {
+      clearTimeout(state.listRetryTimer);
+      state.listRetryTimer = null;
+    }
+    state.listRetryDelayMs = 3000;
     state.plans = data.plans || [];
     if (data.availableAccounts) state.availableAccounts = data.availableAccounts;
     if (data.availableAgents) state.availableAgents = data.availableAgents;
@@ -386,7 +396,17 @@ async function loadPlans() {
       } else { await loadDetail(state.selectedId, 0, { source: 'auto' }); }
     }
     scheduleRefresh();
-  } catch(e) { showErr(String(e)); }
+  } catch(e) {
+    showErr(String(e));
+    if (!state.listRetryTimer) {
+      const delay = state.listRetryDelayMs;
+      state.listRetryTimer = setTimeout(() => {
+        state.listRetryTimer = null;
+        loadPlans();
+      }, delay);
+      state.listRetryDelayMs = Math.min(state.listRetryDelayMs * 2, 15000);
+    }
+  }
 }
 
 async function loadDetail(planId, attempt = 0, options = {}) {
@@ -553,6 +573,7 @@ function renderContent() {
 
 function renderTab() {
   const tb = el('tab-body'); if (!tb || !state.detail) return;
+  tb.classList.toggle('items-tab', state.tab === 'items');
   syncTabClasses();
   const { plan, dashboard } = state.detail;
   if (state.tab === 'items')     { tb.innerHTML = renderItems(plan); bindItemActions(plan); }
@@ -609,11 +630,13 @@ function renderItems(plan) {
       </td>
     </tr>\`;
   }).join('');
-  return \`<div class="card" style="overflow-x:auto">
-    <table class="item-table">
-      <thead><tr><th>Title</th><th>Status</th><th>Agent</th><th></th></tr></thead>
-      <tbody>\${rows}</tbody>
-    </table>
+  return \`<div class="card" style="padding:0;display:flex;flex-direction:column;flex:1;min-height:0">
+    <div class="item-table-wrap">
+      <table class="item-table">
+        <thead><tr><th>Title</th><th>Status</th><th>Agent</th><th></th></tr></thead>
+        <tbody>\${rows}</tbody>
+      </table>
+    </div>
   </div>\`;
 }
 
@@ -688,7 +711,7 @@ function bindItemActions(plan) {
         } catch(err) { showErr(String(err)); return; }
       }
     }
-    renderDetail();
+    renderTab();
   }));
 }
 
@@ -1109,12 +1132,14 @@ let chatMessages = [];
 
 function updateChatVisibility() {
   const panel = el('chat-panel');
+  if (!panel) return;
   if (state.selectedId) panel.classList.remove('hidden');
   else panel.classList.add('hidden');
 }
 
 function renderChatMessages() {
   const container = el('chat-messages');
+  if (!container) return;
   container.innerHTML = chatMessages.map(m =>
     \`<div class="chat-msg \${m.role}">\${escHtml(m.content)}</div>\`
   ).join('');
@@ -1128,6 +1153,7 @@ function addChatMessage(role, content) {
 
 async function sendChatMessage() {
   const input = el('chat-input');
+  if (!input) return;
   const msg = input.value.trim();
   if (!msg || !state.selectedId) return;
 
@@ -1140,7 +1166,7 @@ async function sendChatMessage() {
   renderChatMessages();
 
   const btn = el('btn-chat-send');
-  btn.disabled = true;
+  if (btn) btn.disabled = true;
 
   try {
     const data = await apiFetch('POST', '/plans/' + state.selectedId + '/ask', { message: msg });
@@ -1150,20 +1176,20 @@ async function sendChatMessage() {
     chatMessages.splice(thinkingIdx, 1);
     addChatMessage('assistant', 'Error: ' + String(e));
   } finally {
-    btn.disabled = false;
-    el('chat-input').focus();
+    if (btn) btn.disabled = false;
+    el('chat-input')?.focus();
   }
 }
 
-el('btn-chat-send').addEventListener('click', sendChatMessage);
-el('chat-input').addEventListener('keydown', (e) => {
+el('btn-chat-send')?.addEventListener('click', sendChatMessage);
+el('chat-input')?.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     sendChatMessage();
   }
 });
 
-el('chat-input').addEventListener('input', function() {
+el('chat-input')?.addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 100) + 'px';
 });
@@ -1174,7 +1200,7 @@ document.addEventListener('keydown', (e) => {
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (!state.selectedId) return;
     e.preventDefault();
-    el('chat-input').focus();
+    el('chat-input')?.focus();
   }
 });
 

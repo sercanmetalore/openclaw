@@ -7,7 +7,7 @@ import type { AgentDefinition } from "../types.js";
 const ideaforge: AgentDefinition = {
   config: {
     id: "ideaforge",
-    workspace: "~/IdeaForge",
+    workspace: "~/.openclaw/.ideaforge",
     identity: {
       name: "IdeaForge",
       theme: "venture builder",
@@ -27,21 +27,21 @@ const ideaforge: AgentDefinition = {
       ],
     },
     sandbox: { perSession: false },
-        tools: {
-            profile: "minimal",
-            alsoAllow: [
-                "agents_list",
-                "sessions_list",
-                "sessions_history",
-                "sessions_spawn",
-                "sessions_yield",
-                "subagents",
-                "read",
-                "write",
-                "edit",
-                "exec",
-            ],
-        },
+    tools: {
+      profile: "minimal",
+      alsoAllow: [
+        "agents_list",
+        "sessions_list",
+        "sessions_history",
+        "sessions_spawn",
+        "sessions_yield",
+        "subagents",
+        "read",
+        "write",
+        "edit",
+        "exec",
+      ],
+    },
   },
   files: {
     "IDENTITY.md": `# IdeaForge — Venture Builder & Orchestrator
@@ -85,13 +85,13 @@ Sen **IdeaForge**, fikirleri somut, gerçekleştirilebilir projelere ve iş plan
 - Eksik bilgi varsa sor, varsayımda bulunma.
 
 ### Aşama 2 — Workspace Oluşturma
-- Proje için \`/home/adige/<proje-adi>/\` klasörü oluştur (\`exec\` ile \`mkdir -p\`).
-- \`/home/adige/<proje-adi>/research/\` alt klasörü oluştur.
+- Proje için \`$HOME/<proje-adi>/\` klasörü oluştur (\`exec\` ile \`mkdir -p\`).
+- \`$HOME/<proje-adi>/research/\` alt klasörü oluştur.
 - Proje adını İngilizce, kebab-case formatında belirle (örn: \`online-flower-shop\`).
 
 ### Aşama 3 — Internet Araştırması
 - \`ideaforge-researcher\`'ı spawn et: web_search ile derinlemesine pazar, rakip, trend araştırması.
-- Araştırma çıktılarını \`/home/adige/<proje-adi>/research/\` altına kaydet.
+- Araştırma çıktılarını \`$HOME/<proje-adi>/research/\` altına kaydet.
 - Gerekirse \`ideaforge-analyst\` ve diğer subagent'ları paralel spawn et.
 
 ### Aşama 4 — Proje Planı Oluşturma
@@ -127,7 +127,7 @@ Sen **IdeaForge**, fikirleri somut, gerçekleştirilebilir projelere ve iş plan
   openclaw gateway call plugin.plan.item.add '{"planId":"<planId>","title":"<başlık>","description":"Assignee role: <rol>\\n<detay>","type":"<epic|task>","parentId":"<epicId-varsa>"}'
 
   # Settings ayarla
-  openclaw gateway call plugin.plan.settings.save '{"planId":"<planId>","settings":{"defaultAgentId":"softdev","projectPath":"/home/adige/<proje-adi>"}}'
+    openclaw gateway call plugin.plan.settings.save '{"planId":"<planId>","settings":{"defaultAgentId":"softdev","projectPath":"$HOME/<proje-adi>"}}'
   \`\`\`
 - Araştırma ve plan dokümanlarını workspace'e kaydet.
 
@@ -290,7 +290,7 @@ Bu ajan **orchestrator** modda çalışır: araştırma ve analiz görevlerini s
 - **edit:** Mevcut dokümanları güncellemek için.
 
 ## Terminal (exec)
-- **Klasör oluşturma:** \`mkdir -p /home/adige/<proje-adi>/research\`
+- **Klasör oluşturma:** \`mkdir -p $HOME/<proje-adi>/research\`
 - **Gateway RPC çağrıları:** Project-Plan oluşturma ve yönetme:
   \`\`\`bash
   openclaw gateway call plugin.plan.create '{"name":"...","description":"..."}'
@@ -356,7 +356,7 @@ Bu ajan **orchestrator** modda çalışır: araştırma ve analiz görevlerini s
 ## Her Görev Başlangıcında
 - [ ] Fikir net anlaşıldı mı? Kapsam belirlendi mi?
 - [ ] SearXNG erişilebilir mi? (\`curl http://localhost:8888/healthz\`)
-- [ ] Proje workspace'i oluşturuldu mu? (\`/home/adige/<proje-adi>/\`)
+- [ ] Proje workspace'i oluşturuldu mu? (\`$HOME/<proje-adi>/\`)
 - [ ] Kullanıcının nihai hedefi (validasyon mu, pitch mi, tam geliştirme mi?) netleştirildi mi?
 
 ## Her Subagent Çağrısı Sonrasında
@@ -391,14 +391,14 @@ Bu ajan **orchestrator** modda çalışır: araştırma ve analiz görevlerini s
 1. **Altyapı kontrolü:**
    - SearXNG arama motorunun erişilebilir olduğunu doğrula: \`curl -s http://localhost:8888/healthz\`
    - Eğer SearXNG erişilemiyorsa kullanıcıyı uyar: "SearXNG Docker container çalışmıyor. İnternet araştırması için \`docker compose -f docker-compose.searxng.yml up -d\` komutunu çalıştırın."
-   - \`/home/adige/\` dizininin yazılabilir olduğunu doğrula
+    - \`$HOME/\` dizininin yazılabilir olduğunu doğrula
 
 2. **Workspace kontrolü:**
-   - \`~/IdeaForge\` dizininin varlığını kontrol et
-   - Yoksa oluştur: \`mkdir -p ~/IdeaForge\`
+   - \`~/.openclaw/.ideaforge\` dizininin varlığını kontrol et
+   - Yoksa oluştur: \`mkdir -p ~/.openclaw/.ideaforge\`
 
 3. **Mevcut proje tespiti:**
-   - \`ls /home/adige/\` ile daha önce oluşturulan proje workspace'lerini listele
+    - \`ls $HOME/\` ile daha önce oluşturulan proje workspace'lerini listele
    - Mevcut Project-Plan'ları kontrol et: \`openclaw gateway call plugin.plan.list '{}'\`
 
 4. **Kullanıcıdan girdi al:**
@@ -448,7 +448,7 @@ Bu ajan **orchestrator** modda çalışır: araştırma ve analiz görevlerini s
 const ideaforgeResearcher: AgentDefinition = {
   config: {
     id: "ideaforge-researcher",
-    workspace: "~/IdeaForge/.agents/researcher",
+    workspace: "~/.openclaw/.ideaforge/.agents/researcher",
     identity: { name: "Researcher", theme: "deep-search investigator", emoji: "🌐" },
     tools: { profile: "full" },
   },
@@ -539,7 +539,7 @@ Sen **IdeaForge Researcher**, fikir ve pazar araştırması uzmanısın. Derinle
 const ideaforgeAnalyst: AgentDefinition = {
   config: {
     id: "ideaforge-analyst",
-    workspace: "~/IdeaForge/.agents/analyst",
+    workspace: "~/.openclaw/.ideaforge/.agents/analyst",
     identity: { name: "Analyst", theme: "market analyst", emoji: "📊" },
     tools: { profile: "full" },
   },
@@ -629,7 +629,7 @@ Sen **IdeaForge Analyst**, iş ve pazar analizi uzmanısın. Araştırma bulgula
 const ideaforgeStrategist: AgentDefinition = {
   config: {
     id: "ideaforge-strategist",
-    workspace: "~/IdeaForge/.agents/strategist",
+    workspace: "~/.openclaw/.ideaforge/.agents/strategist",
     identity: { name: "Strategist", theme: "business strategist", emoji: "♟️" },
     tools: { profile: "full" },
   },
@@ -718,7 +718,7 @@ Sen **IdeaForge Strategist**, iş stratejisi ve piyasaya giriş uzmanısın. Fik
 const ideaforgeProduct: AgentDefinition = {
   config: {
     id: "ideaforge-product",
-    workspace: "~/IdeaForge/.agents/product",
+    workspace: "~/.openclaw/.ideaforge/.agents/product",
     identity: { name: "Product", theme: "product manager", emoji: "📦" },
     tools: { profile: "full" },
   },
@@ -806,7 +806,7 @@ Sen **IdeaForge Product**, ürün yönetimi ve roadmap uzmanısın. Fikri somut 
 const ideaforgeArchitect: AgentDefinition = {
   config: {
     id: "ideaforge-architect",
-    workspace: "~/IdeaForge/.agents/architect",
+    workspace: "~/.openclaw/.ideaforge/.agents/architect",
     identity: { name: "Architect", theme: "technical architect", emoji: "🏛️" },
     tools: { profile: "full" },
   },
@@ -895,7 +895,7 @@ Sen **IdeaForge Architect**, teknik fizibilite ve mimari tasarım uzmanısın. F
 const ideaforgeLegal: AgentDefinition = {
   config: {
     id: "ideaforge-legal",
-    workspace: "~/IdeaForge/.agents/legal",
+    workspace: "~/.openclaw/.ideaforge/.agents/legal",
     identity: { name: "Legal", theme: "legal advisor", emoji: "⚖️" },
     tools: { profile: "full" },
   },
@@ -982,7 +982,7 @@ Sen **IdeaForge Legal**, girişim hukuku ve uyumluluk uzmanısın. Fikrin hayata
 const ideaforgeFinancial: AgentDefinition = {
   config: {
     id: "ideaforge-financial",
-    workspace: "~/IdeaForge/.agents/financial",
+    workspace: "~/.openclaw/.ideaforge/.agents/financial",
     identity: { name: "Financial", theme: "financial modeller", emoji: "💰" },
     tools: { profile: "full" },
   },
@@ -1072,7 +1072,7 @@ Sen **IdeaForge Financial**, finansal modelleme ve yatırım analizi uzmanısın
 const ideaforgeMarketing: AgentDefinition = {
   config: {
     id: "ideaforge-marketing",
-    workspace: "~/IdeaForge/.agents/marketing",
+    workspace: "~/.openclaw/.ideaforge/.agents/marketing",
     identity: { name: "Marketing", theme: "growth marketer", emoji: "📣" },
     tools: { profile: "full" },
   },
@@ -1160,7 +1160,7 @@ Sen **IdeaForge Marketing**, büyüme pazarlama ve marka stratejisi uzmanısın.
 const ideaforgeWriter: AgentDefinition = {
   config: {
     id: "ideaforge-writer",
-    workspace: "~/IdeaForge/.agents/writer",
+    workspace: "~/.openclaw/.ideaforge/.agents/writer",
     identity: { name: "Writer", theme: "technical writer", emoji: "✍️" },
     tools: { profile: "full" },
   },

@@ -7,7 +7,7 @@ import type { AgentDefinition } from "../types.js";
 const softdev: AgentDefinition = {
   config: {
     id: "softdev",
-    workspace: "~/.openclaw",
+    workspace: "~/.openclaw/.softdev",
     identity: {
       name: "Orchestrator",
       theme: "engineering manager",
@@ -82,7 +82,7 @@ Sen **SoftDev**, profesyonel bir Engineering Manager ve multi-agent yazılım ge
 4. **Paralel çalıştırabilecek görevleri paralel gönder** — sıralı bağımlılık yoksa bekletme.
 5. **Her subagent çıktısını kontrol et** — kalite standardının altındaysa geri gönder.
 6. **Delegasyon mümkün değilse tahminle ilerleme** — blokajı ve eksik girdiyi kullanıcıya raporla.
-7. **Workspace dışına çıkma** — tüm işlemler \`~/.openclaw\` altında yapılır.
+7. **Workspace dışına çıkma** — tüm işlemler \`~/.openclaw/.softdev\` altında yapılır.
 `,
     "SOUL.md": `# SoftDev — Temel Değerler ve Prensipler
 
@@ -233,7 +233,7 @@ Bu ajan **orchestrator-only** modda çalışır: implementasyon araçlarını do
     "HEARTBEAT.md": `# SoftDev — Periyodik Kontrol Noktaları
 
 ## Her Görev Başlangıcında
-- [ ] Workspace (\`~/.openclaw\`) erişilebilir mi?
+- [ ] Workspace (\`~/.openclaw/.softdev\`) erişilebilir mi?
 - [ ] Mevcut proje yapısını oku ve anla
 - [ ] Aktif branch ve son commit'i kontrol et
 - [ ] Çalışan servisler/container'lar varsa durumlarını kontrol et
@@ -260,11 +260,11 @@ Bu ajan **orchestrator-only** modda çalışır: implementasyon araçlarını do
 ## İlk Çalıştırma Adımları
 
 1. **Workspace kontrolü:**
-   - \`~/.openclaw\` dizininin varlığını kontrol et
-   - Yoksa oluştur: \`mkdir -p ~/.openclaw\`
+   - \`~/.openclaw/.softdev\` dizininin varlığını kontrol et
+   - Yoksa oluştur: \`mkdir -p ~/.openclaw/.softdev\`
 
 2. **Proje yapısı tespiti:**
-   - \`ls -la ~/.openclaw/\` ile mevcut projeleri listele
+   - \`ls -la ~/.openclaw/.softdev/\` ile mevcut projeleri listele
    - Her projenin tech stack'ini tespit et (package.json, requirements.txt, pom.xml, go.mod vb.)
    - README.md varsa oku ve projeyi anla
 
@@ -319,7 +319,7 @@ Bu ajan **orchestrator-only** modda çalışır: implementasyon araçlarını do
 const softdevAnalyst: AgentDefinition = {
   config: {
     id: "softdev-analyst",
-    workspace: "~/.openclaw/.agents/analyst",
+    workspace: "~/.openclaw/.softdev/.agents/analyst",
     identity: { name: "Analyst", theme: "product analyst", emoji: "📋" },
     tools: { profile: "full" },
   },
@@ -437,7 +437,7 @@ Sen **SoftDev Analyst**, yazılım geliştirme sürecinin analiz ve gereksinim u
 const softdevArchitect: AgentDefinition = {
   config: {
     id: "softdev-architect",
-    workspace: "~/.openclaw/.agents/architect",
+    workspace: "~/.openclaw/.softdev/.agents/architect",
     identity: { name: "Architect", theme: "solution architect", emoji: "🏗️" },
     tools: { profile: "full" },
   },
@@ -543,7 +543,7 @@ Sen **SoftDev Architect**, yazılım mimarisi ve sistem tasarımı uzmanısın. 
 const softdevResearch: AgentDefinition = {
   config: {
     id: "softdev-research",
-    workspace: "~/.openclaw/.agents/research",
+    workspace: "~/.openclaw/.softdev/.agents/research",
     identity: { name: "Researcher", theme: "technical investigator", emoji: "🔍" },
     tools: { profile: "full" },
   },
@@ -625,7 +625,7 @@ Sen **SoftDev Research**, teknik araştırma ve bilgi toplama uzmanısın. Bilin
 const softdevBackend: AgentDefinition = {
   config: {
     id: "softdev-backend",
-    workspace: "~/.openclaw/.agents/backend",
+    workspace: "~/.openclaw/.softdev/.agents/backend",
     identity: { name: "Backend", theme: "backend developer", emoji: "⚙️" },
     tools: { profile: "full" },
   },
@@ -716,7 +716,7 @@ Sen **SoftDev Backend**, sunucu taraflı yazılım geliştirme uzmanısın. API'
 const softdevFrontend: AgentDefinition = {
   config: {
     id: "softdev-frontend",
-    workspace: "~/.openclaw/.agents/frontend",
+    workspace: "~/.openclaw/.softdev/.agents/frontend",
     identity: { name: "Frontend", theme: "frontend developer", emoji: "🎨" },
     tools: { profile: "full" },
   },
@@ -801,7 +801,7 @@ Sen **SoftDev Frontend**, kullanıcı arayüzü geliştirme uzmanısın. Modern,
 const softdevDatabase: AgentDefinition = {
   config: {
     id: "softdev-database",
-    workspace: "~/.openclaw/.agents/database",
+    workspace: "~/.openclaw/.softdev/.agents/database",
     identity: { name: "Database", theme: "data architect", emoji: "🗄️" },
     tools: { profile: "full" },
   },
@@ -875,7 +875,7 @@ Sen **SoftDev Database**, veritabanı tasarımı ve veri yönetimi uzmanısın. 
 const softdevDevops: AgentDefinition = {
   config: {
     id: "softdev-devops",
-    workspace: "~/.openclaw/.agents/devops",
+    workspace: "~/.openclaw/.softdev/.agents/devops",
     identity: { name: "DevOps", theme: "infrastructure operator", emoji: "🔧" },
     tools: { profile: "full" },
   },
@@ -959,7 +959,7 @@ Sen **SoftDev DevOps**, altyapı, CI/CD ve deployment uzmanısın. Uygulamanın 
 const softdevQa: AgentDefinition = {
   config: {
     id: "softdev-qa",
-    workspace: "~/.openclaw/.agents/qa",
+    workspace: "~/.openclaw/.softdev/.agents/qa",
     identity: { name: "QA", theme: "quality guardian", emoji: "✅" },
     tools: { profile: "full" },
   },
@@ -1033,7 +1033,7 @@ Sen **SoftDev QA**, yazılım kalite güvence uzmanısın. Test stratejisi belir
 const softdevSecurity: AgentDefinition = {
   config: {
     id: "softdev-security",
-    workspace: "~/.openclaw/.agents/security",
+    workspace: "~/.openclaw/.softdev/.agents/security",
     identity: { name: "Security", theme: "threat analyst", emoji: "🔒" },
     tools: { profile: "full" },
   },
@@ -1114,7 +1114,7 @@ Sen **SoftDev Security**, yazılım güvenliği uzmanısın. Güvenlik açıklar
 const softdevReviewer: AgentDefinition = {
   config: {
     id: "softdev-reviewer",
-    workspace: "~/.openclaw/.agents/reviewer",
+    workspace: "~/.openclaw/.softdev/.agents/reviewer",
     identity: { name: "Reviewer", theme: "code quality sentinel", emoji: "👁️" },
     tools: { profile: "full" },
   },
@@ -1186,7 +1186,7 @@ Sen **SoftDev Reviewer**, kod kalitesi ve best practice uzmanısın. Yazılan ko
 const softdevDocs: AgentDefinition = {
   config: {
     id: "softdev-docs",
-    workspace: "~/.openclaw/.agents/docs",
+    workspace: "~/.openclaw/.softdev/.agents/docs",
     identity: { name: "Docs", theme: "technical writer", emoji: "📝" },
     tools: { profile: "full" },
   },
@@ -1259,7 +1259,7 @@ Sen **SoftDev Docs**, teknik dökümantasyon uzmanısın. Projenin tüm döküma
 const softdevRelease: AgentDefinition = {
   config: {
     id: "softdev-release",
-    workspace: "~/.openclaw/.agents/release",
+    workspace: "~/.openclaw/.softdev/.agents/release",
     identity: { name: "Release", theme: "release manager", emoji: "🚀" },
     tools: { profile: "full" },
   },
