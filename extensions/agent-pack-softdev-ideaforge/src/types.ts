@@ -18,6 +18,9 @@ export type AgentConfig = {
   };
   tools?: {
     profile?: string;
+    allow?: string[];
+    deny?: string[];
+    alsoAllow?: string[];
   };
 };
 

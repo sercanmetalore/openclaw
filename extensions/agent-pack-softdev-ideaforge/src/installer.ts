@@ -57,6 +57,10 @@ async function installAgentConfig(configPath: string, api: OpenClawPluginApi): P
         id: string;
         default?: boolean;
         model?: string | { primary?: string; fallbacks?: string[] };
+        tools?: {
+          profile?: string;
+          alsoAllow?: string[];
+        };
       }>;
     };
   };
@@ -133,6 +137,33 @@ async function installAgentConfig(configPath: string, api: OpenClawPluginApi): P
   // main agent keeps the broadest fallback model coverage.
   const mainEntry = config.agents.list.find((entry) => normalizeId(entry.id) === "main");
   if (mainEntry) {
+    // Keep main as delegation-first by default so orchestration requests do not
+    // silently fall back to direct file/exec implementation paths.
+    const requiredAlsoAllow = [
+      "agents_list",
+      "sessions_list",
+      "sessions_history",
+      "sessions_spawn",
+      "sessions_yield",
+      "subagents",
+    ];
+    const currentTools = mainEntry.tools ?? {};
+    const mergedAlsoAllow = Array.from(
+      new Set([...(currentTools.alsoAllow ?? []), ...requiredAlsoAllow]),
+    );
+    const toolsNeedUpdate =
+      currentTools.profile !== "minimal" ||
+      mergedAlsoAllow.length !== (currentTools.alsoAllow ?? []).length;
+    if (toolsNeedUpdate) {
+      mainEntry.tools = {
+        ...currentTools,
+        profile: "minimal",
+        alsoAllow: mergedAlsoAllow,
+      };
+      changed = true;
+      api.logger.info("agent-pack: hardened main agent tools to delegation-first defaults");
+    }
+
     const currentMainModel = mainEntry.model;
     const mainPrimary =
       typeof currentMainModel === "string"

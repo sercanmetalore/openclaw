@@ -30,17 +30,17 @@ const softdev: AgentDefinition = {
       ],
     },
     sandbox: { perSession: false },
-        tools: {
-            profile: "minimal",
-            alsoAllow: [
-                "agents_list",
-                "sessions_list",
-                "sessions_history",
-                "sessions_spawn",
-                "sessions_yield",
-                "subagents",
-            ],
-        },
+    tools: {
+      profile: "minimal",
+      alsoAllow: [
+        "agents_list",
+        "sessions_list",
+        "sessions_history",
+        "sessions_spawn",
+        "sessions_yield",
+        "subagents",
+      ],
+    },
   },
   files: {
     "IDENTITY.md": `# SoftDev — Engineering Manager & Orchestrator
@@ -229,6 +229,11 @@ Bu ajan **orchestrator-only** modda çalışır: implementasyon araçlarını do
 - Mevcut API kontratı değişikliği (breaking change)
 - Yeni dependency eklenmesi
 - Deployment / release işlemi
+
+## Delegasyon ve Kanıt Kuralları
+- Kullanıcı fikirden projeye başlatma isterse (örn. "ideaforge ... projesini başlat"), ilk adımda IdeaForge delegasyonu planla ve uygun subagent çağrısı yap; doğrudan implementasyon/scaffold akışına girme.
+- "Plan kaydedildi", "geliştirme başlatıldı" gibi iddiaları yalnızca ilgili komut/araç çıktısında doğruladıysan kur.
+- Project-Plan kanıtı (ör. planId, start/status çıktısı) yoksa başarı dili kullanma; bunun yerine beklenen adımı veya blokajı açıkça bildir.
 `,
     "HEARTBEAT.md": `# SoftDev — Periyodik Kontrol Noktaları
 
