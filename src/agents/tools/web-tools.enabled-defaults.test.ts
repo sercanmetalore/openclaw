@@ -169,7 +169,7 @@ describe("web tools defaults", () => {
     expect(tool?.name).toBe("web_search");
   });
 
-  it("prefers runtime-selected web_search provider over local provider config", async () => {
+  it("prefers explicit web_search provider config over runtime-selected metadata", async () => {
     const mockFetch = installMockFetch(createProviderSuccessPayload("gemini"));
     const tool = createWebSearchTool({
       config: {
@@ -198,8 +198,8 @@ describe("web tools defaults", () => {
     const result = await tool?.execute?.("call-runtime-provider", { query: "runtime override" });
 
     expect(mockFetch).toHaveBeenCalled();
-    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("generativelanguage.googleapis.com");
-    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("gemini");
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("api.search.brave.com");
+    expect((result?.details as { provider?: string } | undefined)?.provider).toBe("brave");
   });
 });
 

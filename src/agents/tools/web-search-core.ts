@@ -22,7 +22,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity", "searxng"] as const;
 type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
@@ -40,6 +40,7 @@ const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
+const DEFAULT_SEARXNG_BASE_URL = "http://localhost:8888";
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
@@ -254,6 +255,12 @@ function createWebSearchSchema(params: {
     });
   }
 
+  if (params.provider === "searxng") {
+    return Type.Object({
+      ...querySchema,
+    });
+  }
+
   if (params.provider === "perplexity") {
     if (params.perplexityTransport === "chat_completions") {
       return Type.Object({
@@ -345,6 +352,21 @@ type KimiConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+};
+
+type SearxngConfig = {
+  baseUrl?: string;
+};
+
+type SearxngResult = {
+  title?: string;
+  url?: string;
+  content?: string;
+};
+
+type SearxngResponse = {
+  query?: string;
+  results?: SearxngResult[];
 };
 
 type GrokSearchResponse = {
@@ -639,6 +661,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   if (raw === "perplexity") {
     return "perplexity";
   }
+  if (raw === "searxng") {
+    return "searxng";
+  }
 
   // Auto-detect provider from available API keys (alphabetical order)
   if (raw === "") {
@@ -905,6 +930,26 @@ function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   const fromConfig =
     kimi && "baseUrl" in kimi && typeof kimi.baseUrl === "string" ? kimi.baseUrl.trim() : "";
   return fromConfig || DEFAULT_KIMI_BASE_URL;
+}
+
+function resolveSearxngConfig(search?: WebSearchConfig): SearxngConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const searxng = "searxng" in search ? search.searxng : undefined;
+  if (!searxng || typeof searxng !== "object") {
+    return {};
+  }
+  return searxng as SearxngConfig;
+}
+
+function resolveSearxngBaseUrl(searxng?: SearxngConfig): string {
+  const fromConfig =
+    searxng && "baseUrl" in searxng && typeof searxng.baseUrl === "string"
+      ? searxng.baseUrl.trim()
+      : "";
+  const fromEnv = normalizeSecretInput(process.env.SEARXNG_BASE_URL) ?? "";
+  return (fromConfig || fromEnv || DEFAULT_SEARXNG_BASE_URL).replace(/\/+$/, "");
 }
 
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
@@ -1620,6 +1665,7 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  searxngBaseUrl?: string;
   braveMode?: "web" | "llm-context";
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
@@ -1787,6 +1833,56 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "searxng") {
+    const url = new URL(`${params.searxngBaseUrl ?? DEFAULT_SEARXNG_BASE_URL}/search`);
+    url.searchParams.set("q", params.query);
+    url.searchParams.set("format", "json");
+
+    const mapped = await withTrustedWebSearchEndpoint(
+      {
+        url: url.toString(),
+        timeoutSeconds: params.timeoutSeconds,
+        init: {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+          },
+        },
+      },
+      async (res) => {
+        if (!res.ok) {
+          const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+          const detail = detailResult.text;
+          throw new Error(`SearXNG API error (${res.status}): ${detail || res.statusText}`);
+        }
+
+        const data = (await res.json()) as SearxngResponse;
+        const results = Array.isArray(data.results) ? data.results.slice(0, params.count) : [];
+        return results.map((entry) => ({
+          title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+          url: entry.url ?? "",
+          description: entry.content ? wrapWebContent(entry.content, "web_search") : "",
+        }));
+      },
+    );
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1918,10 +2014,15 @@ export function createWebSearchTool(options?: {
 
   const runtimeProviderCandidate =
     options?.runtimeWebSearch?.selectedProvider ?? options?.runtimeWebSearch?.providerConfigured;
+  const configuredProvider =
+    search && typeof search.provider === "string" && isSearchProvider(search.provider.trim().toLowerCase())
+      ? (search.provider.trim().toLowerCase() as SearchProvider)
+      : undefined;
   const provider =
-    runtimeProviderCandidate && isSearchProvider(runtimeProviderCandidate)
+    configuredProvider ??
+    (runtimeProviderCandidate && isSearchProvider(runtimeProviderCandidate)
       ? runtimeProviderCandidate
-      : resolveSearchProvider(search);
+      : resolveSearchProvider(search));
   const perplexityConfig = resolvePerplexityConfig(search);
   const perplexitySchemaTransportHint =
     options?.runtimeWebSearch?.perplexityTransport ??
@@ -1929,6 +2030,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const searxngConfig = resolveSearxngConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
 
@@ -1941,6 +2043,8 @@ export function createWebSearchTool(options?: {
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
         : provider === "kimi"
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
+          : provider === "searxng"
+            ? "Search the web using self-hosted SearXNG. Returns titles, URLs, and snippets from federated search engines."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
             : braveMode === "llm-context"
@@ -1961,7 +2065,9 @@ export function createWebSearchTool(options?: {
       const perplexityRuntime =
         provider === "perplexity" ? resolvePerplexityTransport(perplexityConfig) : undefined;
       const apiKey =
-        provider === "perplexity"
+        provider === "searxng"
+          ? "searxng"
+          : provider === "perplexity"
           ? perplexityRuntime?.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
@@ -2205,6 +2311,7 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        searxngBaseUrl: resolveSearxngBaseUrl(searxngConfig),
         braveMode,
       });
       return jsonResult(result);
@@ -2235,6 +2342,7 @@ export const __testing = {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
+  resolveSearxngBaseUrl,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,

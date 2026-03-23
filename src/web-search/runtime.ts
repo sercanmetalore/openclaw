@@ -150,8 +150,14 @@ export function resolveWebSearchDefinition(
     return null;
   }
 
+  const configuredProvider =
+    search && typeof search.provider === "string"
+      ? providers.find((entry) => entry.id === search.provider.trim().toLowerCase())?.id
+      : undefined;
+
   const providerId =
     options?.providerId ??
+    configuredProvider ??
     options?.runtimeWebSearch?.selectedProvider ??
     options?.runtimeWebSearch?.providerConfigured ??
     resolveWebSearchProviderId({ search, providers });
