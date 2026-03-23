@@ -28,7 +28,7 @@ const ideaforge: AgentDefinition = {
     },
     sandbox: { perSession: false },
     tools: {
-      profile: "minimal",
+      profile: "full",
       alsoAllow: [
         "agents_list",
         "sessions_list",
@@ -36,10 +36,6 @@ const ideaforge: AgentDefinition = {
         "sessions_spawn",
         "sessions_yield",
         "subagents",
-        "read",
-        "write",
-        "edit",
-        "exec",
       ],
     },
   },
