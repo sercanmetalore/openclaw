@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { registerGatewayMethods } from "./src/gateway.js";
 import { createHttpHandler } from "./src/http.js";
-import { createProjectPlanService } from "./src/service.js";
+import { createProjectPlanService, registerProjectPlanStopHooks } from "./src/service.js";
 import type { ProjectPlanPluginConfig } from "./src/types.js";
 
 const plugin = {
@@ -13,6 +13,8 @@ const plugin = {
 
   register(api: OpenClawPluginApi) {
     const pluginConfig = (api.pluginConfig ?? {}) as ProjectPlanPluginConfig;
+
+    registerProjectPlanStopHooks(api);
 
     // Background service — manages graceful shutdown of agent execution loops.
     api.registerService(createProjectPlanService(api));

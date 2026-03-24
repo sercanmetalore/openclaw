@@ -5,6 +5,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { recomputeContainerStatuses } from "./execution.js";
+import { convertFileToItems } from "./llm-convert.js";
+import { syncFromProvider } from "./providers/index.js";
+import { askPlanQuestion, isRunning, requestStop, startPlanExecution } from "./service.js";
 import {
   buildCounts,
   createItem,
@@ -25,11 +29,6 @@ import {
   upsertAccount,
   type UploadPayload,
 } from "./store.js";
-import { recomputeContainerStatuses } from "./execution.js";
-import { askPlanQuestion, isRunning, requestStop, startPlanExecution } from "./service.js";
-import { syncFromProvider } from "./providers/index.js";
-import { convertFileToItems } from "./llm-convert.js";
-import { renderUI } from "./ui.js";
 import type {
   AvailableAccount,
   ProjectPlanIntegrationId,
@@ -38,6 +37,7 @@ import type {
   ProjectPlanSettings,
   ProjectPlanStatus,
 } from "./types.js";
+import { renderUI } from "./ui.js";
 
 const BASE = "/plugins/project-plan";
 const API = `${BASE}/api`;
@@ -47,10 +47,15 @@ const API = `${BASE}/api`;
 async function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let data = "";
-    req.on("data", (chunk: Buffer) => { data += chunk.toString(); });
+    req.on("data", (chunk: Buffer) => {
+      data += chunk.toString();
+    });
     req.on("end", () => {
-      try { resolve(data ? JSON.parse(data) : {}); }
-      catch { reject(new Error("Invalid JSON")); }
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch {
+        reject(new Error("Invalid JSON"));
+      }
     });
     req.on("error", reject);
   });
@@ -83,7 +88,10 @@ async function buildAvailableAccounts(stateDir: string): Promise<AvailableAccoun
 
 function providerLabel(p: string): string {
   const map: Record<string, string> = {
-    github: "GitHub", gitlab: "GitLab", azuredevops: "Azure DevOps", jira: "Jira",
+    github: "GitHub",
+    gitlab: "GitLab",
+    azuredevops: "Azure DevOps",
+    jira: "Jira",
   };
   return map[p] ?? p;
 }
@@ -155,7 +163,8 @@ function planSummary(plan: Awaited<ReturnType<typeof loadPlan>>, planId: string)
   return {
     plan: { ...plan, execution: { ...plan.execution, running } },
     dashboard: {
-      counts, totalItems,
+      counts,
+      totalItems,
       completionRatio: totalItems > 0 ? doneItems / totalItems : 0,
       running,
       tokenSpent: plan.metrics.tokenSpent,
@@ -195,21 +204,32 @@ export function createHttpHandler(params: {
     try {
       // ── GET /api/plans ───────────────────────────────────────────────────
       if (method === "GET" && apiPath === "/plans") {
-        const [plans, { integrations, availableSources }, availableAccounts, availableAgents] = await Promise.all([
-          listPlans(stateDir),
-          getIntegrations(stateDir),
-          buildAvailableAccounts(stateDir),
-          buildAvailableAgents(api, stateDir),
-        ]);
-        return ok(res, {
-          plans: plans.map((p) => ({
-            id: p.id, name: p.name, description: p.description,
-            status: p.status, source: p.settings.source,
-            updatedAt: p.updatedAt, running: isRunning(p.id),
-            counts: buildCounts(p.items),
-          })),
-          availableSources, integrations, availableAccounts, availableAgents,
-        }), true;
+        const [plans, { integrations, availableSources }, availableAccounts, availableAgents] =
+          await Promise.all([
+            listPlans(stateDir),
+            getIntegrations(stateDir),
+            buildAvailableAccounts(stateDir),
+            buildAvailableAgents(api, stateDir),
+          ]);
+        return (
+          ok(res, {
+            plans: plans.map((p) => ({
+              id: p.id,
+              name: p.name,
+              description: p.description,
+              status: p.status,
+              source: p.settings.source,
+              updatedAt: p.updatedAt,
+              running: isRunning(p.id),
+              counts: buildCounts(p.items),
+            })),
+            availableSources,
+            integrations,
+            availableAccounts,
+            availableAgents,
+          }),
+          true
+        );
       }
 
       // ── POST /api/plans ──────────────────────────────────────────────────
@@ -217,7 +237,7 @@ export function createHttpHandler(params: {
         const body = (await readBody(req)) as { name: string; description?: string };
         const plan = createPlan({ name: body.name, description: body.description });
         await savePlan(stateDir, plan, opts);
-        return ok(res, { ok: true, plan: { id: plan.id } }), true;
+        return (ok(res, { ok: true, plan: { id: plan.id } }), true);
       }
 
       // ── Plan routes ──────────────────────────────────────────────────────
@@ -228,52 +248,60 @@ export function createHttpHandler(params: {
 
         // GET /api/plans/:id
         if (method === "GET" && sub === "") {
-          const [plan, { integrations, availableSources }, availableAccounts, availableAgents] = await Promise.all([
-            loadPlan(stateDir, planId),
-            getIntegrations(stateDir),
-            buildAvailableAccounts(stateDir),
-            buildAvailableAgents(api, stateDir),
-          ]);
-          if (!plan) return err(res, 404, "Plan not found"), true;
-          return ok(res, {
-            ...planSummary(plan, planId),
-            availableSources,
-            integrations,
-            availableAccounts,
-            availableAgents,
-          }), true;
+          const [plan, { integrations, availableSources }, availableAccounts, availableAgents] =
+            await Promise.all([
+              loadPlan(stateDir, planId),
+              getIntegrations(stateDir),
+              buildAvailableAccounts(stateDir),
+              buildAvailableAgents(api, stateDir),
+            ]);
+          if (!plan) return (err(res, 404, "Plan not found"), true);
+          return (
+            ok(res, {
+              ...planSummary(plan, planId),
+              availableSources,
+              integrations,
+              availableAccounts,
+              availableAgents,
+            }),
+            true
+          );
         }
 
         // PUT /api/plans/:id/settings
         if (method === "PUT" && sub === "/settings") {
           const body = (await readBody(req)) as { settings: ProjectPlanSettings };
           const plan = await loadPlan(stateDir, planId);
-          if (!plan) return err(res, 404, "Plan not found"), true;
+          if (!plan) return (err(res, 404, "Plan not found"), true);
           plan.settings = { ...plan.settings, ...body.settings };
           plan.logs.push(createLog({ level: "info", message: "Settings updated." }));
           await savePlan(stateDir, plan, opts);
-          return ok(res), true;
+          return (ok(res), true);
         }
 
         // POST /api/plans/:id/start
         if (method === "POST" && sub === "/start") {
           const plan = await loadPlan(stateDir, planId);
-          if (!plan) return err(res, 404, "Plan not found"), true;
-          if (isRunning(planId)) return err(res, 409, "Already running"), true;
+          if (!plan) return (err(res, 404, "Plan not found"), true);
+          if (isRunning(planId)) return (err(res, 409, "Already running"), true);
           startPlanExecution({ planId, stateDir, api, pluginConfig });
-          return ok(res), true;
+          return (ok(res), true);
         }
 
         // POST /api/plans/:id/retry
         if (method === "POST" && sub === "/retry") {
           const plan = await loadPlan(stateDir, planId);
-          if (!plan) return err(res, 404, "Plan not found"), true;
-          if (isRunning(planId)) return err(res, 409, "Already running"), true;
+          if (!plan) return (err(res, 404, "Plan not found"), true);
+          if (isRunning(planId)) return (err(res, 409, "Already running"), true);
 
           const now = Date.now();
           let resetCount = 0;
           for (const item of plan.items) {
-            if (item.status === "failed" || item.status === "in progress" || item.status === "blocked") {
+            if (
+              item.status === "failed" ||
+              item.status === "in progress" ||
+              item.status === "blocked"
+            ) {
               item.status = "to do";
               item.updatedAt = now;
               resetCount += 1;
@@ -283,33 +311,35 @@ export function createHttpHandler(params: {
           plan.status = "to do";
           plan.execution.running = false;
           plan.execution.currentItemId = undefined;
-          plan.logs.push(createLog({
-            level: "warn",
-            message: `Retry reset: moved ${resetCount} items from failed/in progress/blocked to to do.`,
-          }));
+          plan.logs.push(
+            createLog({
+              level: "warn",
+              message: `Retry reset: moved ${resetCount} items from failed/in progress/blocked to to do.`,
+            }),
+          );
           await savePlan(stateDir, plan, opts);
-          return ok(res, { ok: true, resetCount }), true;
+          return (ok(res, { ok: true, resetCount }), true);
         }
 
         // POST /api/plans/:id/stop
         if (method === "POST" && sub === "/stop") {
-          requestStop(planId);
-          return ok(res), true;
+          await requestStop(planId, api);
+          return (ok(res), true);
         }
 
         // DELETE /api/plans/:id
         if (method === "DELETE" && sub === "") {
-          requestStop(planId);
+          await requestStop(planId, api);
           await deletePlan(stateDir, planId);
-          return ok(res), true;
+          return (ok(res), true);
         }
 
         // POST /api/plans/:id/sync
         if (method === "POST" && sub === "/sync") {
           const plan = await loadPlan(stateDir, planId);
-          if (!plan) return err(res, 404, "Plan not found"), true;
+          if (!plan) return (err(res, 404, "Plan not found"), true);
           const source = plan.settings.source;
-          if (source === "local") return err(res, 400, "Local plans do not support sync"), true;
+          if (source === "local") return (err(res, 400, "Local plans do not support sync"), true);
 
           // Prefer accountId-based auth, fall back to global integration token.
           let token: string | null = null;
@@ -323,7 +353,7 @@ export function createHttpHandler(params: {
           }
 
           if (!token) {
-            return err(res, 400, `No account/token configured for ${source}`), true;
+            return (err(res, 400, `No account/token configured for ${source}`), true);
           }
 
           const { items, added, updated } = await syncFromProvider({
@@ -335,16 +365,18 @@ export function createHttpHandler(params: {
           });
           plan.items = items;
           recomputeContainerStatuses(plan);
-          plan.logs.push(createLog({ level: "info", message: `Sync: ${added} added, ${updated} updated.` }));
+          plan.logs.push(
+            createLog({ level: "info", message: `Sync: ${added} added, ${updated} updated.` }),
+          );
           await savePlan(stateDir, plan, opts);
-          return ok(res, { ok: true, added, updated }), true;
+          return (ok(res, { ok: true, added, updated }), true);
         }
 
         // POST /api/plans/:id/upload
         if (method === "POST" && sub === "/upload") {
           const body = (await readBody(req)) as { payload: string; filename?: string };
           const plan = await loadPlan(stateDir, planId);
-          if (!plan) return err(res, 404, "Plan not found"), true;
+          if (!plan) return (err(res, 404, "Plan not found"), true);
           const filename = body.filename || "upload.json";
           const ext = filename.split(".").pop()?.toLowerCase() ?? "json";
           let jsonStr = body.payload;
@@ -374,46 +406,60 @@ export function createHttpHandler(params: {
               convertMethod = result.method;
             }
           } catch (conversionError) {
-            return err(res, 400, `Import failed: ${String(conversionError)}`), true;
+            return (err(res, 400, `Import failed: ${String(conversionError)}`), true);
           }
 
           let payload: unknown;
-          try { payload = JSON.parse(jsonStr); }
-          catch { return err(res, 400, "Invalid JSON — could not parse converted output"), true; }
+          try {
+            payload = JSON.parse(jsonStr);
+          } catch {
+            return (err(res, 400, "Invalid JSON — could not parse converted output"), true);
+          }
           let newItems: ReturnType<typeof importItemsFromPayload>;
           try {
-            newItems = importItemsFromPayload(payload as unknown as UploadPayload, plan.items.length);
+            newItems = importItemsFromPayload(
+              payload as unknown as UploadPayload,
+              plan.items.length,
+            );
           } catch (importError) {
-            return err(res, 400, `Import failed: ${String(importError)}`), true;
+            return (err(res, 400, `Import failed: ${String(importError)}`), true);
           }
           plan.items = [...plan.items, ...newItems];
           recomputeContainerStatuses(plan);
-          plan.logs.push(createLog({
-            level: "info",
-            message: `Imported ${newItems.length} items from ${filename}${convertMethod !== "direct" ? ` (converted via ${convertMethod})` : ""}.`,
-          }));
+          plan.logs.push(
+            createLog({
+              level: "info",
+              message: `Imported ${newItems.length} items from ${filename}${convertMethod !== "direct" ? ` (converted via ${convertMethod})` : ""}.`,
+            }),
+          );
           await savePlan(stateDir, plan, opts);
-          return ok(res, { ok: true, count: newItems.length, method: convertMethod }), true;
+          return (ok(res, { ok: true, count: newItems.length, method: convertMethod }), true);
         }
 
         // POST /api/plans/:id/items
         if (method === "POST" && sub === "/items") {
           const body = (await readBody(req)) as {
-            title: string; type?: string; description?: string;
-            parentId?: string; assignedAgentId?: string;
+            title: string;
+            type?: string;
+            description?: string;
+            parentId?: string;
+            assignedAgentId?: string;
           };
           const plan = await loadPlan(stateDir, planId);
-          if (!plan) return err(res, 404, "Plan not found"), true;
+          if (!plan) return (err(res, 404, "Plan not found"), true);
           const maxOrder = plan.items.reduce((m, i) => Math.max(m, i.order), -1);
           const item = createItem({
-            title: body.title, type: body.type as never,
-            description: body.description, parentId: body.parentId,
-            assignedAgentId: body.assignedAgentId, order: maxOrder + 1,
+            title: body.title,
+            type: body.type as never,
+            description: body.description,
+            parentId: body.parentId,
+            assignedAgentId: body.assignedAgentId,
+            order: maxOrder + 1,
           });
           plan.items.push(item);
           recomputeContainerStatuses(plan);
           await savePlan(stateDir, plan, opts);
-          return ok(res, { ok: true, item }), true;
+          return (ok(res, { ok: true, item }), true);
         }
 
         // Item sub-routes
@@ -425,14 +471,14 @@ export function createHttpHandler(params: {
           if (method === "PUT" && itemSub === "/status") {
             const body = (await readBody(req)) as { status: ProjectPlanStatus };
             const plan = await loadPlan(stateDir, planId);
-            if (!plan) return err(res, 404, "Plan not found"), true;
+            if (!plan) return (err(res, 404, "Plan not found"), true);
             const item = plan.items.find((i) => i.id === itemId);
-            if (!item) return err(res, 404, "Item not found"), true;
+            if (!item) return (err(res, 404, "Item not found"), true);
             item.status = body.status;
             item.updatedAt = Date.now();
             recomputeContainerStatuses(plan);
             await savePlan(stateDir, plan, opts);
-            return ok(res), true;
+            return (ok(res), true);
           }
 
           if (method === "PUT" && itemSub === "") {
@@ -443,9 +489,9 @@ export function createHttpHandler(params: {
               status?: ProjectPlanStatus;
             };
             const plan = await loadPlan(stateDir, planId);
-            if (!plan) return err(res, 404, "Plan not found"), true;
+            if (!plan) return (err(res, 404, "Plan not found"), true);
             const item = plan.items.find((i) => i.id === itemId);
-            if (!item) return err(res, 404, "Item not found"), true;
+            if (!item) return (err(res, 404, "Item not found"), true);
             if (body.title !== undefined) item.title = body.title;
             if ("description" in body) item.description = body.description;
             if ("assignedAgentId" in body) item.assignedAgentId = body.assignedAgentId ?? undefined;
@@ -453,12 +499,12 @@ export function createHttpHandler(params: {
             item.updatedAt = Date.now();
             recomputeContainerStatuses(plan);
             await savePlan(stateDir, plan, opts);
-            return ok(res), true;
+            return (ok(res), true);
           }
 
           if (method === "DELETE" && itemSub === "") {
             const plan = await loadPlan(stateDir, planId);
-            if (!plan) return err(res, 404, "Plan not found"), true;
+            if (!plan) return (err(res, 404, "Plan not found"), true);
             const toRemove = new Set<string>();
             const collect = (id: string) => {
               toRemove.add(id);
@@ -468,23 +514,23 @@ export function createHttpHandler(params: {
             plan.items = plan.items.filter((i) => !toRemove.has(i.id));
             recomputeContainerStatuses(plan);
             await savePlan(stateDir, plan, opts);
-            return ok(res), true;
+            return (ok(res), true);
           }
 
           // GET /api/plans/:id/items/:itemId/session
           if (method === "GET" && itemSub === "/session") {
             const plan = await loadPlan(stateDir, planId);
-            if (!plan) return err(res, 404, "Plan not found"), true;
+            if (!plan) return (err(res, 404, "Plan not found"), true);
             const item = plan.items.find((i) => i.id === itemId);
-            if (!item) return err(res, 404, "Item not found"), true;
-            return ok(res, { messages: item.sessionOutput ?? [] }), true;
+            if (!item) return (err(res, 404, "Item not found"), true);
+            return (ok(res, { messages: item.sessionOutput ?? [] }), true);
           }
         }
 
         // POST /api/plans/:id/ask
         if (method === "POST" && sub === "/ask") {
           const body = (await readBody(req)) as { message: string };
-          if (!body.message?.trim()) return err(res, 400, "Message is required"), true;
+          if (!body.message?.trim()) return (err(res, 400, "Message is required"), true);
           const dir = await api.runtime.state.resolveStateDir();
           const result = await askPlanQuestion({
             planId,
@@ -492,19 +538,21 @@ export function createHttpHandler(params: {
             stateDir: dir,
             api,
           });
-          return ok(res, result), true;
+          return (ok(res, result), true);
         }
 
         // GET /api/plans/:id/status-summary
         if (method === "GET" && sub === "/status-summary") {
           const plan = await loadPlan(stateDir, planId);
-          if (!plan) return err(res, 404, "Plan not found"), true;
+          if (!plan) return (err(res, 404, "Plan not found"), true);
           const running = isRunning(planId);
           const counts = buildCounts(plan.items);
           const total = plan.items.length;
           const lines: string[] = [];
           lines.push(`Plan: ${plan.name} [${running ? "RUNNING" : plan.status.toUpperCase()}]`);
-          lines.push(`Progress: ${counts["done"]}/${total} done, ${counts["failed"]} failed, ${counts["in progress"]} in progress`);
+          lines.push(
+            `Progress: ${counts["done"]}/${total} done, ${counts["failed"]} failed, ${counts["in progress"]} in progress`,
+          );
           const epics = plan.items.filter((i) => i.type === "epic");
           for (const epic of epics) {
             lines.push(`\n▸ ${epic.title} [${epic.status}]`);
@@ -521,13 +569,13 @@ export function createHttpHandler(params: {
           for (const o of orphans) {
             lines.push(`\n▸ ${o.title} [${o.status}]`);
           }
-          return ok(res, { summary: lines.join("\n") }), true;
+          return (ok(res, { summary: lines.join("\n") }), true);
         }
       }
 
       // ── GET /api/integrations ────────────────────────────────────────────
       if (method === "GET" && apiPath === "/integrations") {
-        return ok(res, await getIntegrations(stateDir)), true;
+        return (ok(res, await getIntegrations(stateDir)), true);
       }
 
       // ── PUT /api/integrations ────────────────────────────────────────────
@@ -536,23 +584,25 @@ export function createHttpHandler(params: {
           integrations: Partial<Record<ProjectPlanIntegrationId, ProjectPlanIntegrationSettings>>;
         };
         await saveIntegrationsConfig(stateDir, body.integrations);
-        return ok(res), true;
+        return (ok(res), true);
       }
 
       // ── GET /api/accounts ────────────────────────────────────────────────
       if (method === "GET" && apiPath === "/accounts") {
         const accounts = await loadAccounts(stateDir);
-        return ok(res, { accounts: toPublicAccounts(accounts) }), true;
+        return (ok(res, { accounts: toPublicAccounts(accounts) }), true);
       }
 
       // ── POST /api/accounts — create ──────────────────────────────────────
       if (method === "POST" && apiPath === "/accounts") {
         const body = (await readBody(req)) as {
-          name: string; provider: ProjectPlanIntegrationId;
-          enabled: boolean; settings: ProjectPlanIntegrationSettings;
+          name: string;
+          provider: ProjectPlanIntegrationId;
+          enabled: boolean;
+          settings: ProjectPlanIntegrationSettings;
         };
         const account = await upsertAccount(stateDir, body);
-        return ok(res, { ok: true, account: { id: account.id } }), true;
+        return (ok(res, { ok: true, account: { id: account.id } }), true);
       }
 
       // ── Account routes with ID ───────────────────────────────────────────
@@ -563,17 +613,19 @@ export function createHttpHandler(params: {
         // PUT /api/accounts/:id — update
         if (method === "PUT") {
           const body = (await readBody(req)) as {
-            name: string; provider: ProjectPlanIntegrationId;
-            enabled: boolean; settings: ProjectPlanIntegrationSettings;
+            name: string;
+            provider: ProjectPlanIntegrationId;
+            enabled: boolean;
+            settings: ProjectPlanIntegrationSettings;
           };
           const account = await upsertAccount(stateDir, { id: accountId, ...body });
-          return ok(res, { ok: true, account: { id: account.id } }), true;
+          return (ok(res, { ok: true, account: { id: account.id } }), true);
         }
 
         // DELETE /api/accounts/:id
         if (method === "DELETE") {
           await deleteAccount(stateDir, accountId);
-          return ok(res), true;
+          return (ok(res), true);
         }
       }
 
@@ -586,17 +638,27 @@ export function createHttpHandler(params: {
         try {
           const dirents = await fs.readdir(resolved, { withFileTypes: true });
           entries = dirents
-            .map((d: { name: string; isDirectory: () => boolean }) => ({ name: d.name, isDir: d.isDirectory() }))
+            .map((d: { name: string; isDirectory: () => boolean }) => ({
+              name: d.name,
+              isDir: d.isDirectory(),
+            }))
             .sort((a: { name: string; isDir: boolean }, b: { name: string; isDir: boolean }) => {
               if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
               return a.name.localeCompare(b.name);
             });
-        } catch { /* permission error */ }
+        } catch {
+          /* permission error */
+        }
         const parentPath = path.dirname(resolved);
-        return ok(res, {
-          path: resolved, parent: resolved === parentPath ? null : parentPath,
-          entries, sep: path.sep,
-        }), true;
+        return (
+          ok(res, {
+            path: resolved,
+            parent: resolved === parentPath ? null : parentPath,
+            entries,
+            sep: path.sep,
+          }),
+          true
+        );
       }
 
       err(res, 404, "Not found");

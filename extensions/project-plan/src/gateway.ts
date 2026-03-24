@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { recomputeContainerStatuses } from "./execution.js";
+import { convertFileToItems } from "./llm-convert.js";
+import { syncFromProvider } from "./providers/index.js";
+import { isRunning, requestStop, startPlanExecution } from "./service.js";
 import {
   buildCounts,
   createItem,
@@ -24,10 +28,6 @@ import {
   toPublicAccounts,
   type UploadPayload,
 } from "./store.js";
-import { recomputeContainerStatuses } from "./execution.js";
-import { isRunning, requestStop, startPlanExecution } from "./service.js";
-import { convertFileToItems } from "./llm-convert.js";
-import { syncFromProvider } from "./providers/index.js";
 import type {
   ProjectPlanDetailResult,
   ProjectPlanIntegrationId,
@@ -196,7 +196,11 @@ export function registerGatewayMethods(
       const now = Date.now();
       let resetCount = 0;
       for (const item of plan.items) {
-        if (item.status === "failed" || item.status === "in progress" || item.status === "blocked") {
+        if (
+          item.status === "failed" ||
+          item.status === "in progress" ||
+          item.status === "blocked"
+        ) {
           item.status = "to do";
           item.updatedAt = now;
           resetCount += 1;
@@ -222,8 +226,8 @@ export function registerGatewayMethods(
   });
 
   // ── stop ──────────────────────────────────────────────────────────────────
-  api.registerGatewayMethod("plugin.plan.stop", (req) => {
-    requestStop(req.params.planId as string);
+  api.registerGatewayMethod("plugin.plan.stop", async (req) => {
+    await requestStop(req.params.planId as string, api);
     req.respond(true, { ok: true });
   });
 
@@ -232,7 +236,7 @@ export function registerGatewayMethods(
     try {
       const dir = await stateDir();
       const planId = req.params.planId as string;
-      requestStop(planId);
+      await requestStop(planId, api);
       await deletePlan(dir, planId);
       req.respond(true, { ok: true });
     } catch (err) {
@@ -250,9 +254,15 @@ export function registerGatewayMethods(
         status: ProjectPlanStatus;
       };
       const plan = await loadPlan(dir, planId);
-      if (!plan) { req.respond(false, undefined, { message: "Plan not found" }); return; }
+      if (!plan) {
+        req.respond(false, undefined, { message: "Plan not found" });
+        return;
+      }
       const item = plan.items.find((i) => i.id === itemId);
-      if (!item) { req.respond(false, undefined, { message: "Item not found" }); return; }
+      if (!item) {
+        req.respond(false, undefined, { message: "Item not found" });
+        return;
+      }
       item.status = status;
       item.updatedAt = Date.now();
       recomputeContainerStatuses(plan);
@@ -269,7 +279,10 @@ export function registerGatewayMethods(
       const dir = await stateDir();
       const planId = req.params.planId as string;
       const plan = await loadPlan(dir, planId);
-      if (!plan) { req.respond(false, undefined, { message: "Plan not found" }); return; }
+      if (!plan) {
+        req.respond(false, undefined, { message: "Plan not found" });
+        return;
+      }
       const source = plan.settings.source;
       if (source === "local") {
         req.respond(false, undefined, { message: "Local plans do not support provider sync" });
@@ -308,7 +321,10 @@ export function registerGatewayMethods(
       const payloadText = req.params.payload as string;
       const filename = (req.params.filename as string | undefined) ?? "upload.json";
       const plan = await loadPlan(dir, planId);
-      if (!plan) { req.respond(false, undefined, { message: "Plan not found" }); return; }
+      if (!plan) {
+        req.respond(false, undefined, { message: "Plan not found" });
+        return;
+      }
 
       // Try direct parse+validate; on failure use LLM conversion
       let jsonStr = payloadText;
@@ -318,7 +334,9 @@ export function registerGatewayMethods(
         const parsed = JSON.parse(payloadText);
         importItemsFromPayload(parsed as unknown as UploadPayload, 0); // dry-run
         directOk = true;
-      } catch { /* non-standard format — fall through to LLM */ }
+      } catch {
+        /* non-standard format — fall through to LLM */
+      }
       if (!directOk) {
         try {
           const result = await convertFileToItems({ content: payloadText, filename, api });
@@ -331,8 +349,12 @@ export function registerGatewayMethods(
       }
 
       let payload: unknown;
-      try { payload = JSON.parse(jsonStr); }
-      catch { req.respond(false, undefined, { message: "Invalid JSON after conversion" }); return; }
+      try {
+        payload = JSON.parse(jsonStr);
+      } catch {
+        req.respond(false, undefined, { message: "Invalid JSON after conversion" });
+        return;
+      }
       const newItems = importItemsFromPayload(
         payload as unknown as UploadPayload,
         plan.items.length,
@@ -340,7 +362,10 @@ export function registerGatewayMethods(
       plan.items = [...plan.items, ...newItems];
       recomputeContainerStatuses(plan);
       plan.logs.push(
-        createLog({ level: "info", message: `Imported ${newItems.length} items${convertMethod !== "direct" ? ` (converted via ${convertMethod})` : ""}.` }),
+        createLog({
+          level: "info",
+          message: `Imported ${newItems.length} items${convertMethod !== "direct" ? ` (converted via ${convertMethod})` : ""}.`,
+        }),
       );
       await savePlan(dir, plan, opts);
       req.respond(true, { ok: true, count: newItems.length, method: convertMethod });
@@ -382,7 +407,10 @@ export function registerGatewayMethods(
       try {
         const dirents = await fs.readdir(resolved, { withFileTypes: true });
         entries = dirents
-          .map((d: { name: string; isDirectory: () => boolean }) => ({ name: d.name, isDir: d.isDirectory() }))
+          .map((d: { name: string; isDirectory: () => boolean }) => ({
+            name: d.name,
+            isDir: d.isDirectory(),
+          }))
           .sort((a: { name: string; isDir: boolean }, b: { name: string; isDir: boolean }) => {
             if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
             return a.name.localeCompare(b.name);
@@ -415,9 +443,19 @@ export function registerGatewayMethods(
         assignedAgentId?: string;
       };
       const plan = await loadPlan(dir, planId);
-      if (!plan) { req.respond(false, undefined, { message: "Plan not found" }); return; }
+      if (!plan) {
+        req.respond(false, undefined, { message: "Plan not found" });
+        return;
+      }
       const maxOrder = plan.items.reduce((m, i) => Math.max(m, i.order), -1);
-      const item = createItem({ title, type, description, parentId, assignedAgentId, order: maxOrder + 1 });
+      const item = createItem({
+        title,
+        type,
+        description,
+        parentId,
+        assignedAgentId,
+        order: maxOrder + 1,
+      });
       plan.items.push(item);
       recomputeContainerStatuses(plan);
       await savePlan(dir, plan, opts);
@@ -440,9 +478,15 @@ export function registerGatewayMethods(
         status?: ProjectPlanStatus;
       };
       const plan = await loadPlan(dir, planId);
-      if (!plan) { req.respond(false, undefined, { message: "Plan not found" }); return; }
+      if (!plan) {
+        req.respond(false, undefined, { message: "Plan not found" });
+        return;
+      }
       const item = plan.items.find((i) => i.id === itemId);
-      if (!item) { req.respond(false, undefined, { message: "Item not found" }); return; }
+      if (!item) {
+        req.respond(false, undefined, { message: "Item not found" });
+        return;
+      }
       item.title = title;
       item.description = description;
       item.assignedAgentId = assignedAgentId ?? undefined;
@@ -462,7 +506,10 @@ export function registerGatewayMethods(
       const dir = await stateDir();
       const { planId, itemId } = req.params as { planId: string; itemId: string };
       const plan = await loadPlan(dir, planId);
-      if (!plan) { req.respond(false, undefined, { message: "Plan not found" }); return; }
+      if (!plan) {
+        req.respond(false, undefined, { message: "Plan not found" });
+        return;
+      }
       // Remove item and all its children.
       const toRemove = new Set<string>();
       const collect = (id: string) => {
@@ -509,9 +556,15 @@ export function registerGatewayMethods(
       const dir = await stateDir();
       const { planId, itemId } = req.params as { planId: string; itemId: string };
       const plan = await loadPlan(dir, planId);
-      if (!plan) { req.respond(false, undefined, { message: "Plan not found" }); return; }
+      if (!plan) {
+        req.respond(false, undefined, { message: "Plan not found" });
+        return;
+      }
       const item = plan.items.find((i) => i.id === itemId);
-      if (!item) { req.respond(false, undefined, { message: "Item not found" }); return; }
+      if (!item) {
+        req.respond(false, undefined, { message: "Item not found" });
+        return;
+      }
       req.respond(true, { messages: item.sessionOutput ?? [] });
     } catch (err) {
       req.respond(false, undefined, { message: String(err) });
@@ -533,7 +586,9 @@ export function registerGatewayMethods(
         const counts = buildCounts(plan.items);
         const total = plan.items.length;
         lines.push(`Plan: ${plan.name} [${running ? "RUNNING" : plan.status.toUpperCase()}]`);
-        lines.push(`Progress: ${counts["done"]}/${total} done, ${counts["failed"]} failed, ${counts["in progress"]} in progress`);
+        lines.push(
+          `Progress: ${counts["done"]}/${total} done, ${counts["failed"]} failed, ${counts["in progress"]} in progress`,
+        );
         const epics = plan.items.filter((i) => i.type === "epic");
         for (const epic of epics) {
           lines.push(`\n▸ ${epic.title} [${epic.status}]`);

@@ -30,6 +30,7 @@ type RunnerState = {
     sessionKey: string;
   };
   abortRequested?: boolean;
+  trackedRuns: Map<string, { runId: string; sessionKey: string }>;
 };
 
 type TranscriptMessage = {
@@ -308,13 +309,106 @@ function chooseExecutionAgentId(params: {
 
 const runners = new Map<string, RunnerState>();
 
+function runRefKey(runId: string, sessionKey: string): string {
+  return `${runId}@@${sessionKey}`;
+}
+
+function addTrackedRun(state: RunnerState, runId: string, sessionKey: string): void {
+  state.trackedRuns.set(runRefKey(runId, sessionKey), { runId, sessionKey });
+}
+
+function deleteTrackedRun(state: RunnerState, runId: string, sessionKey?: string): void {
+  for (const [key, ref] of state.trackedRuns.entries()) {
+    const runMatches = runId ? ref.runId === runId : false;
+    const sessionMatches = sessionKey ? ref.sessionKey === sessionKey : false;
+    if (runMatches || sessionMatches) {
+      state.trackedRuns.delete(key);
+    }
+  }
+}
+
+function findPlanIdBySessionKey(sessionKey: string | undefined): string | undefined {
+  if (!sessionKey) {
+    return undefined;
+  }
+  for (const [planId, state] of runners.entries()) {
+    if (!state.running) {
+      continue;
+    }
+    if (sessionKey.includes(`project-plan-${planId}`)) {
+      return planId;
+    }
+  }
+  return undefined;
+}
+
+async function abortTrackedRuns(params: {
+  api: OpenClawPluginApi;
+  planId: string;
+  state: RunnerState;
+}): Promise<void> {
+  const { api, planId, state } = params;
+  const refs = [...state.trackedRuns.values()];
+  await Promise.allSettled(
+    refs.map(async (ref) => {
+      try {
+        const res = await api.runtime.subagent.abortRun({
+          sessionKey: ref.sessionKey,
+          runId: ref.runId,
+        });
+        if (res.aborted) {
+          api.logger.info(
+            `project-plan: aborted tracked run planId=${planId} runId=${ref.runId} sessionKey=${ref.sessionKey}`,
+          );
+        }
+      } catch (err: unknown) {
+        api.logger.warn(
+          `project-plan: tracked abort failed planId=${planId} runId=${ref.runId} sessionKey=${ref.sessionKey} error=${String(err)}`,
+        );
+      }
+    }),
+  );
+}
+
+export function registerProjectPlanStopHooks(api: OpenClawPluginApi): void {
+  api.on("subagent_delivery_target", (event) => {
+    const planId = findPlanIdBySessionKey(event.requesterSessionKey);
+    if (!planId || !event.childRunId) {
+      return;
+    }
+    const state = runners.get(planId);
+    if (!state || !state.running) {
+      return;
+    }
+    addTrackedRun(state, event.childRunId, event.childSessionKey);
+  });
+
+  api.on("subagent_spawned", (event, ctx) => {
+    const planId = findPlanIdBySessionKey(ctx.requesterSessionKey);
+    if (!planId) {
+      return;
+    }
+    const state = runners.get(planId);
+    if (!state || !state.running) {
+      return;
+    }
+    addTrackedRun(state, event.runId, event.childSessionKey);
+  });
+
+  api.on("subagent_ended", (event) => {
+    for (const state of runners.values()) {
+      deleteTrackedRun(state, event.runId ?? "", event.targetSessionKey);
+    }
+  });
+}
+
 /** Returns true when a plan execution loop is active. */
 export function isRunning(planId: string): boolean {
   return runners.get(planId)?.running === true;
 }
 
 /** Request graceful stop for a running plan. */
-export function requestStop(planId: string, api?: OpenClawPluginApi): void {
+export async function requestStop(planId: string, api?: OpenClawPluginApi): Promise<void> {
   const state = runners.get(planId);
   if (!state) {
     return;
@@ -322,6 +416,7 @@ export function requestStop(planId: string, api?: OpenClawPluginApi): void {
   state.stopRequested = true;
   if (api) {
     requestActiveRunAbort({ api, planId, state });
+    await abortTrackedRuns({ api, planId, state });
   }
 }
 
@@ -341,7 +436,7 @@ export function startPlanExecution(params: {
 }): void {
   const { planId, stateDir, api, pluginConfig } = params;
   if (runners.get(planId)?.running) return;
-  const state: RunnerState = { running: true, stopRequested: false };
+  const state: RunnerState = { running: true, stopRequested: false, trackedRuns: new Map() };
   runners.set(planId, state);
   runPlanLoop({ planId, stateDir, api, pluginConfig, state }).catch((err: unknown) => {
     api.logger.error(`project-plan: unhandled loop error planId=${planId} error=${String(err)}`);
@@ -509,6 +604,7 @@ async function processItem(params: {
         extraSystemPrompt: buildSystemPrompt(projectPath),
       });
       runnerState.activeRun = { runId, sessionKey };
+      addTrackedRun(runnerState, runId, sessionKey);
       runnerState.abortRequested = false;
       if (runnerState.stopRequested) {
         requestActiveRunAbort({ api, planId: plan.id, state: runnerState });
@@ -521,6 +617,10 @@ async function processItem(params: {
         runnerState,
         timeoutMs,
       });
+
+      if (result.status !== "timeout") {
+        deleteTrackedRun(runnerState, runId, sessionKey);
+      }
 
       if (runnerState.stopRequested || !isTransientOverloadRunResult(result)) {
         break;
@@ -1110,7 +1210,7 @@ export function createProjectPlanService(api: OpenClawPluginApi) {
     stop: async (_ctx: unknown) => {
       for (const [planId, state] of runners.entries()) {
         if (state.running) {
-          requestStop(planId, api);
+          await requestStop(planId, api);
           api.logger.info(`project-plan: stop requested on shutdown planId=${planId}`);
         }
       }
