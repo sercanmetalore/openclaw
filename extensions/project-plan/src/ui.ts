@@ -901,25 +901,25 @@ function renderLogs(plan) {
   const logs = [...allLogs].reverse();
   const rows = logs.length
     ? logs.map(l =>
-      `<div class="log-entry">
-        <span class="log-ts">${new Date(l.ts).toLocaleTimeString()}</span>
-        <span class="log-lv-${escHtml(l.level)}">${escHtml(String(l.level || '').toUpperCase())}</span>
-        <span class="log-msg">${escHtml(l.message)}</span>
-      </div>`
+      '<div class="log-entry">'
+      + '<span class="log-ts">' + escHtml(new Date(l.ts).toLocaleTimeString()) + '</span>'
+      + '<span class="log-lv-' + escHtml(l.level) + '">' + escHtml(String(l.level || '').toUpperCase()) + '</span>'
+      + '<span class="log-msg">' + escHtml(l.message) + '</span>'
+      + '</div>'
     ).join('')
     : '<div style="color:#555;padding:20px;text-align:center;font-size:13px">No log entries yet.</div>';
-  return `<div class="card log-card">
-    <div class="log-toolbar">
-      <div class="log-toolbar-title">${allLogs.length} log entries</div>
-      <div class="log-toolbar-actions">
-        <button class="secondary" data-export-logs="100">Export Last 100</button>
-        <button class="secondary" data-export-logs="1000">Export Last 1000</button>
-        <button class="secondary" data-export-logs="2000">Export Last 2000</button>
-        <button class="secondary" data-export-logs="full">Export Full</button>
-      </div>
-    </div>
-    <div class="log-list">${rows}</div>
-  </div>`;
+  return '<div class="card log-card">'
+    + '<div class="log-toolbar">'
+    + '<div class="log-toolbar-title">' + allLogs.length + ' log entries</div>'
+    + '<div class="log-toolbar-actions">'
+    + '<button class="secondary" data-export-logs="100">Export Last 100</button>'
+    + '<button class="secondary" data-export-logs="1000">Export Last 1000</button>'
+    + '<button class="secondary" data-export-logs="2000">Export Last 2000</button>'
+    + '<button class="secondary" data-export-logs="full">Export Full</button>'
+    + '</div>'
+    + '</div>'
+    + '<div class="log-list">' + rows + '</div>'
+    + '</div>';
 }
 
 function sanitizeFilenamePart(input) {
