@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { classifyCompletion, isTransientOverloadRunResult } from "./service.js";
+import {
+  classifyCompletion,
+  isTransientOverloadCompletionReason,
+  isTransientOverloadRunResult,
+} from "./service.js";
 
 describe("project-plan completion classification", () => {
   it("fails when assistant message is missing", () => {
@@ -56,6 +60,20 @@ describe("project-plan completion classification", () => {
         status: "error",
         error: '{"type":"error","error":{"type":"bad_request","message":"Invalid request"}}',
       }),
+    ).toBe(false);
+  });
+
+  it("detects overloaded completion reasons as transient", () => {
+    expect(
+      isTransientOverloadCompletionReason(
+        'Agent run error: {"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"}}',
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat generic completion failures as transient overload", () => {
+    expect(
+      isTransientOverloadCompletionReason("Agent run error: permission denied while writing files"),
     ).toBe(false);
   });
 });

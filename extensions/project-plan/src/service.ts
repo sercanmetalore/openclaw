@@ -98,6 +98,10 @@ export function isTransientOverloadRunResult(result: { status: string; error?: u
   return result.status === "error" && isOverloadedRunError(result.error);
 }
 
+export function isTransientOverloadCompletionReason(reason: string): boolean {
+  return /Agent run error:/i.test(reason) && /overloaded_error|\boverloaded\b/i.test(reason);
+}
+
 function isYieldOrDelegationIssue(message: string | undefined): boolean {
   if (!message) {
     return false;
@@ -626,6 +630,19 @@ async function processItem(params: {
         plan.logs.push(
           createLog({ level: "info", message: `Completed: ${item.title}`, itemId: item.id }),
         );
+      } else if (isTransientOverloadCompletionReason(completion.reason)) {
+        item.status = "to do";
+        item.updatedAt = Date.now();
+        plan.logs.push(
+          createLog({
+            level: "warn",
+            message: `Transient overload: deferring ${item.title} for retry (${completion.reason})`,
+            itemId: item.id,
+          }),
+        );
+        await savePlan(stateDir, plan, { maxLogEntries: maxLog });
+        await new Promise((resolve) => setTimeout(resolve, OVERLOAD_RETRY_BASE_DELAY_MS));
+        return;
       } else {
         item.status = "failed";
         item.updatedAt = Date.now();
