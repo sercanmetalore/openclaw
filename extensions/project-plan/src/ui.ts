@@ -963,7 +963,7 @@ function exportLogs(plan, mode) {
   });
   const suffix = limit == null ? 'full' : ('last-' + limit);
   const filename = sanitizeFilenamePart(plan.name) + '-logs-' + suffix + '.txt';
-  downloadTextFile(filename, [...header, ...lines].join('\n'));
+  downloadTextFile(filename, [...header, ...lines].join('\\n'));
 }
 
 function bindLogs(plan) {

@@ -109,11 +109,17 @@ describe("deleteSession", () => {
 });
 
 describe("deleteAllSessionsAndRefresh", () => {
-  it("deletes normal sessions and resets protected main sessions", async () => {
+  it("deletes only stale sessions and resets protected stale main sessions", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "sessions.list") {
         return {
-          sessions: [{ key: "agent:softdev:main" }, { key: "agent:softdev:session-1" }],
+          sessions: [
+            { key: "agent:softdev:main", updatedAt: now - 2 * 60 * 60 * 1000 },
+            { key: "agent:softdev:session-1", updatedAt: now - 90 * 60 * 1000 },
+            { key: "agent:softdev:active", updatedAt: now - 10 * 60 * 1000 },
+          ],
         };
       }
       if (method === "sessions.delete") {
@@ -150,6 +156,11 @@ describe("deleteAllSessionsAndRefresh", () => {
     });
     expect(request).toHaveBeenCalledWith("sessions.delete", {
       key: "agent:softdev:session-1",
+      deleteTranscript: true,
+      emitLifecycleHooks: false,
+    });
+    expect(request).not.toHaveBeenCalledWith("sessions.delete", {
+      key: "agent:softdev:active",
       deleteTranscript: true,
       emitLifecycleHooks: false,
     });

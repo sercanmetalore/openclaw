@@ -2,6 +2,8 @@ import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { SessionsListResult } from "../types.ts";
 
+const STALE_SESSION_WINDOW_MS = 60 * 60 * 1000;
+
 export type SessionsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -139,7 +141,7 @@ export async function deleteAllSessionsAndRefresh(state: SessionsState): Promise
   }
 
   const confirmed = window.confirm(
-    "Clear all sessions?\n\nThis deletes all deletable sessions and resets protected main sessions.",
+    "Clear all sessions?\n\nThis clears only sessions that were inactive for more than 1 hour. Active sessions are kept.",
   );
   if (!confirmed) {
     return 0;
@@ -158,7 +160,15 @@ export async function deleteAllSessionsAndRefresh(state: SessionsState): Promise
     });
 
     const sessions = listRes?.sessions ?? state.sessionsResult?.sessions ?? [];
-    for (const row of sessions) {
+    const cutoff = Date.now() - STALE_SESSION_WINDOW_MS;
+    const staleSessions = sessions.filter((row) => {
+      if (typeof row.updatedAt !== "number") {
+        return true;
+      }
+      return row.updatedAt < cutoff;
+    });
+
+    for (const row of staleSessions) {
       try {
         await state.client.request("sessions.delete", {
           key: row.key,
