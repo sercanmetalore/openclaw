@@ -57,6 +57,7 @@ select option{background:var(--panel-2)}
 .detail-fixed > *:last-child{margin-bottom:0}
 .tab-body{flex:1;min-height:0;overflow-y:auto;padding-right:2px}
 .tab-body.items-tab{display:flex;flex-direction:column;overflow:hidden}
+.tab-body.logs-tab{display:flex;flex-direction:column;overflow:hidden}
 .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;text-transform:uppercase}
 .badge-todo{background:var(--panel-hover);color:var(--muted)}
 .badge-inprogress{background:#1a3a5c;color:#7cb9f8}
@@ -89,7 +90,11 @@ tr:hover .item-actions{opacity:1}
 .kpi .kval{font-size:22px;font-weight:700}
 .prog-bar{height:5px;background:var(--panel-hover);border-radius:3px;overflow:hidden;margin-top:6px}
 .prog-fill{height:100%;background:#3b5ef0;border-radius:3px;transition:width .4s}
-.log-list{font-family:monospace;font-size:12px;display:flex;flex-direction:column;gap:2px;max-height:420px;overflow-y:auto}
+.log-card{display:flex;flex-direction:column;flex:1;min-height:0}
+.log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.log-toolbar-title{font-size:12px;color:var(--muted)}
+.log-toolbar-actions{display:flex;gap:6px;flex-wrap:wrap}
+.log-list{font-family:monospace;font-size:12px;display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow-y:auto}
 .log-entry{display:flex;gap:8px;padding:3px 6px;border-radius:3px}
 .log-entry:hover{background:var(--log-bg)}
 .log-ts{color:var(--muted-2);flex-shrink:0} .log-lv-info{color:#5a7ef8} .log-lv-warn{color:#f8b84a} .log-lv-error{color:#f87171}
@@ -361,6 +366,16 @@ function fmtDur(ms) {
   if (!ms) return '—'; const s = Math.floor(ms/1000);
   return s < 60 ? s+'s' : Math.floor(s/60)+'m '+(s%60)+'s';
 }
+function formatLogSignature(plan) {
+  const logs = Array.isArray(plan?.logs) ? plan.logs : [];
+  const last = logs[logs.length - 1];
+  return [
+    logs.length,
+    last?.ts || '',
+    last?.level || '',
+    last?.message || '',
+  ].join('|');
+}
 function el(id) { return document.getElementById(id); }
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 let _errTimer;
@@ -420,6 +435,7 @@ async function loadDetail(planId, attempt = 0, options = {}) {
     const prevTabScrollTop = prevTabBody?.scrollTop || 0;
     const prevItemScrollTop = prevItemTableWrap?.scrollTop || 0;
     const prevRunning = !!prevDetail?.dashboard?.running;
+    const prevLogSig = formatLogSignature(prevDetail?.plan);
 
     const data = await apiFetch('GET', '/plans/' + planId);
     state.selectedId = planId; state.detail = data;
@@ -433,6 +449,7 @@ async function loadDetail(planId, attempt = 0, options = {}) {
     renderSidebar();
 
     const nextRunning = !!data?.dashboard?.running;
+    const nextLogSig = formatLogSignature(data?.plan);
     const canPartialRefresh =
       source === 'auto' &&
       samePlan &&
@@ -442,6 +459,18 @@ async function loadDetail(planId, attempt = 0, options = {}) {
 
     // Avoid resetting unsaved form fields while user is editing settings.
     if (source === 'auto' && samePlan && state.tab === 'settings' && state.settingsDirty) {
+      scheduleRefresh();
+      return;
+    }
+
+    // Avoid rerender churn on logs tab when nothing changed.
+    if (
+      source === 'auto' &&
+      samePlan &&
+      state.tab === 'logs' &&
+      prevRunning === nextRunning &&
+      prevLogSig === nextLogSig
+    ) {
       scheduleRefresh();
       return;
     }
@@ -580,11 +609,12 @@ function renderContent() {
 function renderTab() {
   const tb = el('tab-body'); if (!tb || !state.detail) return;
   tb.classList.toggle('items-tab', state.tab === 'items');
+  tb.classList.toggle('logs-tab', state.tab === 'logs');
   syncTabClasses();
   const { plan, dashboard } = state.detail;
   if (state.tab === 'items')     { tb.innerHTML = renderItems(plan); bindItemActions(plan); }
   if (state.tab === 'settings')  { tb.innerHTML = renderSettings(plan); bindSettings(plan); }
-  if (state.tab === 'logs')      { tb.innerHTML = renderLogs(plan); }
+  if (state.tab === 'logs')      { tb.innerHTML = renderLogs(plan); bindLogs(plan); }
   if (state.tab === 'dashboard') { tb.innerHTML = renderDashboard(dashboard); }
 }
 
@@ -814,11 +844,7 @@ function renderProviderFields(s) {
 }
 
 function bindSettings(plan) {
-  const markDirty = () => { state.settingsDirty = true; };
-  document.querySelectorAll('#tab-body input, #tab-body select, #tab-body textarea').forEach((node) => {
-    node.addEventListener('input', markDirty);
-    node.addEventListener('change', markDirty);
-  });
+  attachSettingsDirtyListeners();
 
   // Source change → re-render provider fields
   el('s-source-sel')?.addEventListener('change', () => {
@@ -832,6 +858,7 @@ function bindSettings(plan) {
       source: provider || 'local',
     };
     el('s-provider-fields').innerHTML = renderProviderFields(mockSettings);
+    attachSettingsDirtyListeners();
   });
 
   el('btn-browse')?.addEventListener('click', () => browsePath(el('s-proj-path').value || ''));
@@ -858,17 +885,94 @@ function bindSettings(plan) {
   });
 }
 
+function attachSettingsDirtyListeners() {
+  const markDirty = () => { state.settingsDirty = true; };
+  document.querySelectorAll('#tab-body input, #tab-body select, #tab-body textarea').forEach((node) => {
+    if (node.dataset.ppDirtyBound === '1') return;
+    node.dataset.ppDirtyBound = '1';
+    node.addEventListener('input', markDirty);
+    node.addEventListener('change', markDirty);
+  });
+}
+
 // ── Logs tab ──────────────────────────────────────────────────────────────────
 function renderLogs(plan) {
-  const logs = [...plan.logs].reverse();
-  if (!logs.length) return '<div style="color:#555;padding:20px;text-align:center;font-size:13px">No log entries yet.</div>';
-  return \`<div class="card"><div class="log-list">\${logs.map(l =>
-    \`<div class="log-entry">
-      <span class="log-ts">\${new Date(l.ts).toLocaleTimeString()}</span>
-      <span class="log-lv-\${l.level}">\${l.level.toUpperCase()}</span>
-      <span class="log-msg">\${l.message}</span>
-    </div>\`
-  ).join('')}</div></div>\`;
+  const allLogs = Array.isArray(plan.logs) ? plan.logs : [];
+  const logs = [...allLogs].reverse();
+  const rows = logs.length
+    ? logs.map(l =>
+      `<div class="log-entry">
+        <span class="log-ts">${new Date(l.ts).toLocaleTimeString()}</span>
+        <span class="log-lv-${escHtml(l.level)}">${escHtml(String(l.level || '').toUpperCase())}</span>
+        <span class="log-msg">${escHtml(l.message)}</span>
+      </div>`
+    ).join('')
+    : '<div style="color:#555;padding:20px;text-align:center;font-size:13px">No log entries yet.</div>';
+  return `<div class="card log-card">
+    <div class="log-toolbar">
+      <div class="log-toolbar-title">${allLogs.length} log entries</div>
+      <div class="log-toolbar-actions">
+        <button class="secondary" data-export-logs="100">Export Last 100</button>
+        <button class="secondary" data-export-logs="1000">Export Last 1000</button>
+        <button class="secondary" data-export-logs="2000">Export Last 2000</button>
+        <button class="secondary" data-export-logs="full">Export Full</button>
+      </div>
+    </div>
+    <div class="log-list">${rows}</div>
+  </div>`;
+}
+
+function sanitizeFilenamePart(input) {
+  const cleaned = String(input || 'project-plan')
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return cleaned || 'project-plan';
+}
+
+function downloadTextFile(filename, content) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportLogs(plan, mode) {
+  const logs = Array.isArray(plan.logs) ? plan.logs : [];
+  const limitMap = { '100': 100, '1000': 1000, '2000': 2000, full: null };
+  const limit = Object.prototype.hasOwnProperty.call(limitMap, mode) ? limitMap[mode] : 100;
+  const selectedLogs = limit == null ? logs : logs.slice(Math.max(0, logs.length - limit));
+  const header = [
+    'Project Plan Logs Export',
+    'Plan: ' + (plan.name || 'Untitled'),
+    'Mode: ' + (limit == null ? 'full' : ('last-' + limit)),
+    'Entries: ' + selectedLogs.length,
+    'Generated: ' + new Date().toISOString(),
+    '',
+  ];
+  const lines = selectedLogs.map((entry) => {
+    const ts = new Date(entry.ts).toISOString();
+    const level = String(entry.level || 'info').toUpperCase();
+    const message = String(entry.message || '').replace(/\r?\n/g, '\\n');
+    return '[' + ts + '] [' + level + '] ' + message;
+  });
+  const suffix = limit == null ? 'full' : ('last-' + limit);
+  const filename = sanitizeFilenamePart(plan.name) + '-logs-' + suffix + '.txt';
+  downloadTextFile(filename, [...header, ...lines].join('\n'));
+}
+
+function bindLogs(plan) {
+  document.querySelectorAll('[data-export-logs]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const mode = button.dataset.exportLogs || '100';
+      exportLogs(plan, mode);
+    });
+  });
 }
 
 // ── Dashboard tab ─────────────────────────────────────────────────────────────
