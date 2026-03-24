@@ -958,7 +958,7 @@ function exportLogs(plan, mode) {
   const lines = selectedLogs.map((entry) => {
     const ts = new Date(entry.ts).toISOString();
     const level = String(entry.level || 'info').toUpperCase();
-    const message = String(entry.message || '').replace(/\r?\n/g, '\\n');
+    const message = String(entry.message || '').replace(/\\r?\\n/g, '\\\\n');
     return '[' + ts + '] [' + level + '] ' + message;
   });
   const suffix = limit == null ? 'full' : ('last-' + limit);
