@@ -9,9 +9,16 @@ import {
   recomputeContainerStatuses,
 } from "./execution.js";
 import { createLog, loadPlan, savePlan } from "./store.js";
-import type { ProjectPlanItem, ProjectPlanPluginConfig, ProjectPlanRecord, ProjectPlanSessionMessage } from "./types.js";
+import type {
+  ProjectPlanItem,
+  ProjectPlanPluginConfig,
+  ProjectPlanRecord,
+  ProjectPlanSessionMessage,
+} from "./types.js";
 
 const DEFAULT_ITEM_TIMEOUT_MINUTES = 30;
+const OVERLOAD_MAX_RETRIES = 2;
+const OVERLOAD_RETRY_BASE_DELAY_MS = 2_000;
 
 // ── In-memory run state ───────────────────────────────────────────────────────
 
@@ -45,6 +52,51 @@ type AssistantOutcome = {
   errorMessage?: string;
   transientToolOnlyIssue?: boolean;
 };
+
+function isOverloadedRunError(error: unknown): boolean {
+  if (typeof error === "string") {
+    const text = error.trim();
+    if (/overloaded_error/i.test(text) || /\boverloaded\b/i.test(text)) {
+      return true;
+    }
+    if (text.startsWith("{") || text.startsWith("[")) {
+      try {
+        return isOverloadedRunError(JSON.parse(text));
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  if (Array.isArray(error)) {
+    return error.some((entry) => isOverloadedRunError(entry));
+  }
+
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const shaped = error as {
+    type?: unknown;
+    message?: unknown;
+    error?: unknown;
+    details?: unknown;
+  };
+
+  if (typeof shaped.type === "string" && /overloaded_error/i.test(shaped.type)) {
+    return true;
+  }
+  if (typeof shaped.message === "string" && /\boverloaded\b/i.test(shaped.message)) {
+    return true;
+  }
+
+  return isOverloadedRunError(shaped.error) || isOverloadedRunError(shaped.details);
+}
+
+export function isTransientOverloadRunResult(result: { status: string; error?: unknown }): boolean {
+  return result.status === "error" && isOverloadedRunError(result.error);
+}
 
 function isYieldOrDelegationIssue(message: string | undefined): boolean {
   if (!message) {
@@ -439,26 +491,51 @@ async function processItem(params: {
   await savePlan(stateDir, plan, { maxLogEntries: maxLog });
 
   try {
-    const runStartedAt = Date.now();
-    const { runId } = await api.runtime.subagent.run({
-      sessionKey,
-      idempotencyKey: crypto.randomUUID(),
-      message: buildItemMessage(plan, item, projectPath),
-      extraSystemPrompt: buildSystemPrompt(projectPath),
-    });
-    runnerState.activeRun = { runId, sessionKey };
-    runnerState.abortRequested = false;
-    if (runnerState.stopRequested) {
-      requestActiveRunAbort({ api, planId: plan.id, state: runnerState });
-    }
+    let runStartedAt = Date.now();
+    let result: Awaited<ReturnType<OpenClawPluginApi["runtime"]["subagent"]["waitForRun"]>> = {
+      status: "timeout",
+    };
 
-    const result = await waitForRunWithStopPolling({
-      api,
-      runId,
-      planId: plan.id,
-      runnerState,
-      timeoutMs,
-    });
+    for (let attempt = 0; attempt <= OVERLOAD_MAX_RETRIES; attempt += 1) {
+      runStartedAt = Date.now();
+      const { runId } = await api.runtime.subagent.run({
+        sessionKey,
+        idempotencyKey: crypto.randomUUID(),
+        message: buildItemMessage(plan, item, projectPath),
+        extraSystemPrompt: buildSystemPrompt(projectPath),
+      });
+      runnerState.activeRun = { runId, sessionKey };
+      runnerState.abortRequested = false;
+      if (runnerState.stopRequested) {
+        requestActiveRunAbort({ api, planId: plan.id, state: runnerState });
+      }
+
+      result = await waitForRunWithStopPolling({
+        api,
+        runId,
+        planId: plan.id,
+        runnerState,
+        timeoutMs,
+      });
+
+      if (runnerState.stopRequested || !isTransientOverloadRunResult(result)) {
+        break;
+      }
+      if (attempt >= OVERLOAD_MAX_RETRIES) {
+        break;
+      }
+
+      const delayMs = OVERLOAD_RETRY_BASE_DELAY_MS * (attempt + 1);
+      plan.logs.push(
+        createLog({
+          level: "warn",
+          message: `Transient overload: retrying ${item.title} (${attempt + 1}/${OVERLOAD_MAX_RETRIES})`,
+          itemId: item.id,
+        }),
+      );
+      await savePlan(stateDir, plan, { maxLogEntries: maxLog });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
 
     if (runnerState.stopRequested) {
       item.status = "to do";

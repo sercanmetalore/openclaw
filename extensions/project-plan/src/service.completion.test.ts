@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyCompletion } from "./service.js";
+import { classifyCompletion, isTransientOverloadRunResult } from "./service.js";
 
 describe("project-plan completion classification", () => {
   it("fails when assistant message is missing", () => {
@@ -21,7 +21,9 @@ describe("project-plan completion classification", () => {
   });
 
   it("surfaces assistant runtime errors when completion message is missing", () => {
-    expect(classifyCompletion("", { assistantErrorMessage: "Failed to extract accountId from token" })).toEqual({
+    expect(
+      classifyCompletion("", { assistantErrorMessage: "Failed to extract accountId from token" }),
+    ).toEqual({
       ok: false,
       reason: "Agent run error: Failed to extract accountId from token",
     });
@@ -36,5 +38,24 @@ describe("project-plan completion classification", () => {
       ok: false,
       reason: "Agent run error: Assistant yielded before sending a completion message",
     });
+  });
+
+  it("detects overloaded run result from JSON-encoded error payload", () => {
+    expect(
+      isTransientOverloadRunResult({
+        status: "error",
+        error:
+          '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}',
+      }),
+    ).toBe(true);
+  });
+
+  it("does not mark non-overload errors as transient overload", () => {
+    expect(
+      isTransientOverloadRunResult({
+        status: "error",
+        error: '{"type":"error","error":{"type":"bad_request","message":"Invalid request"}}',
+      }),
+    ).toBe(false);
   });
 });
