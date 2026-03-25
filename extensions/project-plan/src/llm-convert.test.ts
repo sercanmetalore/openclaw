@@ -100,6 +100,80 @@ describe("project-plan JSON fallback normalization", () => {
     expect(task?.description).toContain("Acceptance Criteria:");
     expect(task?.description).toContain("Scope Boundaries:");
   });
+
+  it("normalizes nested roadmap sprints without collapsing them into metadata tasks", () => {
+    const normalized = normalizeJsonPayloadToItems({
+      project: {
+        name: "Ontology-Aware Hybrid Memory OS Master Plan",
+        description: "Transformation backlog",
+      },
+      roadmap: {
+        sprints: [
+          {
+            id: "SPRINT-MOS-01",
+            name: "Foundation and Architecture Envelope",
+            duration: "2 weeks",
+            epics: [
+              {
+                id: "EPIC-MOS-001",
+                name: "Platform Foundation and Bounded Contexts",
+                goal: "Define the target-state control plane.",
+                tasks: [
+                  {
+                    id: "TASK-MOS-001",
+                    name: "Control plane service and contract map",
+                    outcome: "A single source of truth for service contracts.",
+                    subtasks: [
+                      {
+                        id: "SUBTASK-MOS-001A",
+                        name: "Architecture contract",
+                        objective: "Freeze the bounded context matrix.",
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(normalized.items).toHaveLength(1);
+    expect(normalized.items[0]?.title).toBe("Platform Foundation and Bounded Contexts");
+    expect(normalized.items[0]?.type).toBe("epic");
+    expect(normalized.items[0]?.children?.[0]?.title).toBe(
+      "Control plane service and contract map",
+    );
+    expect(normalized.items[0]?.children?.[0]?.children?.[0]?.title).toBe("Architecture contract");
+    expect(normalized.items[0]?.description).toContain(
+      "Sprint: Foundation and Architecture Envelope",
+    );
+    expect(normalized.items[0]?.description).toContain("Project context:");
+  });
+
+  it("marks generic top-level JSON extraction as low-confidence section fallback", () => {
+    const normalized = normalizeJsonPayloadToItems({
+      project: {
+        name: "Loose JSON",
+      },
+      interfaces: [
+        {
+          name: "DocumentStoreConfig",
+          purpose: "Store configuration contract",
+        },
+      ],
+      tables: [
+        {
+          name: "document_stores",
+          purpose: "Primary store table",
+        },
+      ],
+    });
+
+    expect(normalized.strategy).toBe("section-fallback");
+    expect(normalized.items.map((item) => item.title)).toEqual(["Interfaces", "Tables"]);
+  });
 });
 
 describe("project-plan structured text normalization", () => {
@@ -131,7 +205,9 @@ Filtre kararı:
     expect(normalized.items).toHaveLength(2);
     expect(normalized.items[0]?.title).toBe("Özet");
     expect(normalized.items[0]?.type).toBe("epic");
-    expect(normalized.items[0]?.description).toContain("Document: Plugin Store Catalog Roadmap JSON");
+    expect(normalized.items[0]?.description).toContain(
+      "Document: Plugin Store Catalog Roadmap JSON",
+    );
     expect(normalized.items[0]?.description).toContain("Yeni plan dosyası");
     expect(normalized.items[0]?.children?.[0]?.title).toBe(
       "Planın temel gerçekleri mevcut store koduna sabitlensin",

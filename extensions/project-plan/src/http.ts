@@ -384,7 +384,7 @@ export function createHttpHandler(params: {
 
           try {
             if (ext === "json") {
-              // Try direct parse first; if format doesn't match, fall through to LLM.
+              // Try direct import first; otherwise run the JSON/text normalization pipeline.
               let directOk = false;
               try {
                 const parsed = JSON.parse(body.payload);
@@ -392,7 +392,7 @@ export function createHttpHandler(params: {
                 jsonStr = body.payload;
                 directOk = true;
               } catch {
-                // Non-standard or wrong-shape JSON — normalize with the primary model.
+                // Non-standard or wrong-shape JSON — normalize before importing.
               }
               if (!directOk) {
                 const result = await convertFileToItems({ content: body.payload, filename, api });

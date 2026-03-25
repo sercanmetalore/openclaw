@@ -2,16 +2,13 @@
 // Prefers the system default agent (main) and waits synchronously for output.
 // Falls back to the embedded runner and then basic parsers.
 
-import { createRequire } from "node:module";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import crypto from "node:crypto";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import {
-  parseStructuredTextToItems,
-  type StructuredImportItem,
-} from "./text-structure.js";
+import { parseStructuredTextToItems, type StructuredImportItem } from "./text-structure.js";
 
 // ── Load embedded runner ──────────────────────────────────────────────────────
 
@@ -25,6 +22,7 @@ type TranscriptMessage = {
 };
 
 type NormalizedItem = StructuredImportItem;
+type JsonNormalizationStrategy = "array" | "plan-container" | "roadmap" | "section-fallback";
 
 async function loadRunner(): Promise<RunFn | null> {
   const require = createRequire(import.meta.url);
@@ -50,7 +48,7 @@ async function loadRunner(): Promise<RunFn | null> {
   for (const candidate of candidates) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mod = await import(candidate) as any;
+      const mod = (await import(candidate)) as any;
       if (typeof mod.runEmbeddedPiAgent === "function") {
         return mod.runEmbeddedPiAgent as RunFn;
       }
@@ -78,17 +76,41 @@ function resolvePrimaryAgentId(api: OpenClawPluginApi): string {
 function extractJson(text: string): string | null {
   const stripped = stripFences(text);
   // Try the full stripped text first.
-  try { JSON.parse(stripped); return stripped; } catch { /* continue */ }
+  try {
+    JSON.parse(stripped);
+    return stripped;
+  } catch {
+    /* continue */
+  }
   // Find the first { or [ and try from there.
   const start = stripped.search(/[{[]/);
   if (start === -1) return null;
   const sub = stripped.slice(start);
-  try { JSON.parse(sub); return sub; } catch { /* continue */ }
+  try {
+    JSON.parse(sub);
+    return sub;
+  } catch {
+    /* continue */
+  }
   // Try regex extraction of a JSON block.
   const objMatch = stripped.match(/(\{[\s\S]*\})/);
-  if (objMatch) { try { JSON.parse(objMatch[1]!); return objMatch[1]!; } catch { /* continue */ } }
+  if (objMatch) {
+    try {
+      JSON.parse(objMatch[1]!);
+      return objMatch[1]!;
+    } catch {
+      /* continue */
+    }
+  }
   const arrMatch = stripped.match(/(\[[\s\S]*\])/);
-  if (arrMatch) { try { JSON.parse(arrMatch[1]!); return arrMatch[1]!; } catch { /* continue */ } }
+  if (arrMatch) {
+    try {
+      JSON.parse(arrMatch[1]!);
+      return arrMatch[1]!;
+    } catch {
+      /* continue */
+    }
+  }
   return null;
 }
 
@@ -247,13 +269,20 @@ function buildSharedCriticalContext(root: Record<string, unknown>): string | und
   const blocks: string[] = [];
   const project = isRecord(root.project) ? root.project : undefined;
   if (project) {
-    const projectSummary = buildDescriptionFromRecord(project, ["name", "version", "parent_plan", "related_plan_reviewed"]);
+    const projectSummary = buildDescriptionFromRecord(project, [
+      "name",
+      "version",
+      "parent_plan",
+      "related_plan_reviewed",
+    ]);
     if (projectSummary) {
       blocks.push(`Project context:\n${projectSummary}`);
     }
   }
 
-  const currentStateAnchors = isRecord(root.currentStateAnchors) ? root.currentStateAnchors : undefined;
+  const currentStateAnchors = isRecord(root.currentStateAnchors)
+    ? root.currentStateAnchors
+    : undefined;
   if (currentStateAnchors) {
     const knownGaps = formatMetadataValue(currentStateAnchors.knownGaps);
     if (knownGaps) {
@@ -279,10 +308,7 @@ function buildSharedCriticalContext(root: Record<string, unknown>): string | und
   return joinDescriptionBlocks(blocks);
 }
 
-function normalizeTaskRecord(
-  raw: unknown,
-  sharedCriticalContext?: string,
-): NormalizedItem | null {
+function normalizeTaskRecord(raw: unknown, sharedCriticalContext?: string): NormalizedItem | null {
   if (!isRecord(raw)) {
     return normalizeGenericChildItem(raw, "task", sharedCriticalContext);
   }
@@ -304,7 +330,14 @@ function normalizeTaskRecord(
     title,
     type: "task",
     description: joinDescriptionBlocks([
-      buildDescriptionFromRecord(raw, ["title", "name", "label", "summary", "subtasks", "children"]),
+      buildDescriptionFromRecord(raw, [
+        "title",
+        "name",
+        "label",
+        "summary",
+        "subtasks",
+        "children",
+      ]),
       sharedCriticalContext,
     ]),
     children: children.length ? children : undefined,
@@ -317,7 +350,11 @@ function normalizeEpicRecord(
   sharedCriticalContext?: string,
 ): NormalizedItem | null {
   if (!isRecord(raw)) {
-    return normalizeGenericChildItem(raw, "epic", joinDescriptionBlocks([sprintContext, sharedCriticalContext]));
+    return normalizeGenericChildItem(
+      raw,
+      "epic",
+      joinDescriptionBlocks([sprintContext, sharedCriticalContext]),
+    );
   }
   const title = pickRecordTitle(raw);
   if (!title) {
@@ -343,22 +380,10 @@ function normalizeEpicRecord(
   };
 }
 
-export function normalizeJsonPayloadToItems(payload: unknown): { items: NormalizedItem[] } {
-  if (Array.isArray(payload)) {
-    const items = payload
-      .map((entry, index) => normalizeEpicRecord(entry, undefined, undefined) ?? normalizeGenericChildItem(entry, "task", undefined, `Item ${index + 1}`))
-      .filter((item): item is NormalizedItem => Boolean(item));
-    if (items.length) {
-      return { items };
-    }
-    throw new Error("JSON fallback could not find any importable items in the array payload.");
-  }
-
-  if (!isRecord(payload)) {
-    throw new Error("JSON fallback expected an object or array payload.");
-  }
-
-  const sharedCriticalContext = buildSharedCriticalContext(payload);
+function normalizePlanContainer(
+  payload: Record<string, unknown>,
+  sharedCriticalContext?: string,
+): NormalizedItem[] {
   const sprints = Array.isArray(payload.sprints) ? payload.sprints : [];
   const sprintItems = sprints.flatMap((sprint, sprintIndex) => {
     if (!isRecord(sprint)) {
@@ -375,10 +400,10 @@ export function normalizeJsonPayloadToItems(payload: unknown): { items: Normaliz
       .filter((item): item is NormalizedItem => Boolean(item));
   });
   if (sprintItems.length) {
-    return { items: sprintItems };
+    return sprintItems;
   }
 
-  for (const key of ["epics", "tasks", "items"]) {
+  for (const key of ["epics", "tasks", "items", "steps"]) {
     const section = payload[key];
     if (!Array.isArray(section)) {
       continue;
@@ -388,21 +413,83 @@ export function normalizeJsonPayloadToItems(payload: unknown): { items: Normaliz
       .map((entry, index) =>
         type === "epic"
           ? normalizeEpicRecord(entry, undefined, sharedCriticalContext)
-          : normalizeTaskRecord(entry, sharedCriticalContext)
-            ?? normalizeGenericChildItem(entry, "task", sharedCriticalContext, `${humanizeKey(key)} ${index + 1}`),
+          : (normalizeTaskRecord(entry, sharedCriticalContext) ??
+            normalizeGenericChildItem(
+              entry,
+              "task",
+              sharedCriticalContext,
+              `${humanizeKey(key)} ${index + 1}`,
+            )),
       )
       .filter((item): item is NormalizedItem => Boolean(item));
     if (items.length) {
-      return { items };
+      return items;
+    }
+  }
+
+  return [];
+}
+
+export function normalizeJsonPayloadToItems(payload: unknown): {
+  items: NormalizedItem[];
+  strategy: JsonNormalizationStrategy;
+} {
+  if (Array.isArray(payload)) {
+    const items = payload
+      .map(
+        (entry, index) =>
+          normalizeEpicRecord(entry, undefined, undefined) ??
+          normalizeGenericChildItem(entry, "task", undefined, `Item ${index + 1}`),
+      )
+      .filter((item): item is NormalizedItem => Boolean(item));
+    if (items.length) {
+      return { items, strategy: "array" };
+    }
+    throw new Error("JSON fallback could not find any importable items in the array payload.");
+  }
+
+  if (!isRecord(payload)) {
+    throw new Error("JSON fallback expected an object or array payload.");
+  }
+
+  const sharedCriticalContext = buildSharedCriticalContext(payload);
+  const directItems = normalizePlanContainer(payload, sharedCriticalContext);
+  if (directItems.length) {
+    return { items: directItems, strategy: "plan-container" };
+  }
+
+  const roadmap = isRecord(payload.roadmap) ? payload.roadmap : undefined;
+  if (roadmap) {
+    const roadmapItems = normalizePlanContainer(
+      roadmap,
+      joinDescriptionBlocks([
+        buildDescriptionFromRecord(roadmap, [
+          "title",
+          "name",
+          "label",
+          "summary",
+          "sprints",
+          "epics",
+          "tasks",
+          "items",
+          "steps",
+        ]),
+        sharedCriticalContext,
+      ]),
+    );
+    if (roadmapItems.length) {
+      return { items: roadmapItems, strategy: "roadmap" };
     }
   }
 
   const sectionItems = Object.entries(payload)
     .filter(([key]) => !["project", "sprints"].includes(key))
-    .map(([key, value]) => {
+    .map<NormalizedItem | null>(([key, value]) => {
       if (Array.isArray(value)) {
         const children = value
-          .map((entry, index) => normalizeGenericChildItem(entry, "task", undefined, `${humanizeKey(key)} ${index + 1}`))
+          .map((entry, index) =>
+            normalizeGenericChildItem(entry, "task", undefined, `${humanizeKey(key)} ${index + 1}`),
+          )
           .filter((item): item is NormalizedItem => Boolean(item));
         if (children.length) {
           return {
@@ -426,10 +513,10 @@ export function normalizeJsonPayloadToItems(payload: unknown): { items: Normaliz
         ]),
       };
     })
-    .filter((item): item is NormalizedItem => Boolean(item));
+    .filter((item): item is NormalizedItem => item !== null);
 
   if (sectionItems.length) {
-    return { items: sectionItems };
+    return { items: sectionItems, strategy: "section-fallback" };
   }
 
   throw new Error("JSON fallback could not infer a project-plan hierarchy from the payload.");
@@ -438,25 +525,36 @@ export function normalizeJsonPayloadToItems(payload: unknown): { items: Normaliz
 // ── Basic fallback parsers ────────────────────────────────────────────────────
 
 function parseCSV(content: string): object {
-  const lines = content.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = content
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
   if (!lines.length) return { items: [] };
   // Detect header row
   const header = lines[0]!.toLowerCase();
   const hasHeader = header.includes("title") || header.includes("name") || header.includes("task");
   const dataLines = hasHeader ? lines.slice(1) : lines;
   const cols = hasHeader ? lines[0]!.split(",").map((c) => c.trim().toLowerCase()) : null;
-  const titleIdx = cols ? (cols.indexOf("title") !== -1 ? cols.indexOf("title") : cols.indexOf("name") !== -1 ? cols.indexOf("name") : 0) : 0;
+  const titleIdx = cols
+    ? cols.indexOf("title") !== -1
+      ? cols.indexOf("title")
+      : cols.indexOf("name") !== -1
+        ? cols.indexOf("name")
+        : 0
+    : 0;
   const descIdx = cols ? cols.indexOf("description") : -1;
   const typeIdx = cols ? cols.indexOf("type") : -1;
-  const items = dataLines.map((line) => {
-    const parts = line.split(",").map((p) => p.trim().replace(/^"|"$/g, ""));
-    const title = parts[titleIdx] ?? line;
-    if (!title) return null;
-    const item: Record<string, string> = { title, type: "task" };
-    if (descIdx !== -1 && parts[descIdx]) item.description = parts[descIdx]!;
-    if (typeIdx !== -1 && parts[typeIdx]) item.type = parts[typeIdx]!;
-    return item;
-  }).filter(Boolean);
+  const items = dataLines
+    .map((line) => {
+      const parts = line.split(",").map((p) => p.trim().replace(/^"|"$/g, ""));
+      const title = parts[titleIdx] ?? line;
+      if (!title) return null;
+      const item: Record<string, string> = { title, type: "task" };
+      if (descIdx !== -1 && parts[descIdx]) item.description = parts[descIdx]!;
+      if (typeIdx !== -1 && parts[typeIdx]) item.type = parts[typeIdx]!;
+      return item;
+    })
+    .filter(Boolean);
   return { items };
 }
 
@@ -464,7 +562,8 @@ function parseCSV(content: string): object {
 
 const MAX_PROMPT_CHARS = 20_000;
 
-const CONVERT_PROMPT = (filename: string, content: string) => `
+const CONVERT_PROMPT = (filename: string, content: string) =>
+  `
 You are a project planning assistant. Convert the following file content into a structured project plan for OpenClaw Project Plan.
 
 Output ONLY valid JSON in this exact format — no explanation, no markdown prose, just the JSON:
@@ -512,7 +611,7 @@ ${content.slice(0, MAX_PROMPT_CHARS)}
 const CONVERT_SYSTEM_PROMPT = [
   "You are a strict JSON transformer for project planning imports.",
   "Return ONLY valid JSON and no prose.",
-  "The JSON must match this shape: {\"items\":[...]} where each item can have title, type, description, children.",
+  'The JSON must match this shape: {"items":[...]} where each item can have title, type, description, children.',
   "Allowed item types: epic, task, subtask.",
   "Preserve important source metadata in description instead of dropping it.",
   "Epics and tasks must keep critical context such as acceptance criteria, gaps, boundaries, principles, risks, and notes inside description when present.",
@@ -536,7 +635,12 @@ export async function convertFileToItems(params: {
     try {
       const parsed = JSON.parse(content);
       const normalized = normalizeJsonPayloadToItems(parsed);
-      return { json: JSON.stringify(normalized), method: "json-fallback" };
+      if (normalized.strategy !== "section-fallback") {
+        return { json: JSON.stringify({ items: normalized.items }), method: "json-fallback" };
+      }
+      api.logger.warn(
+        "project-plan: JSON fallback found only low-confidence section items, escalating to LLM",
+      );
     } catch (error) {
       api.logger.warn(
         `project-plan: JSON fallback normalize failed, trying LLM error=${String(error)}`,
@@ -621,7 +725,9 @@ export async function convertFileToItems(params: {
         return { json: extracted, method: "llm" };
       }
     } catch (e) {
-      api.logger.warn(`project-plan: LLM convert failed, falling back to basic parser error=${String(e)}`);
+      api.logger.warn(
+        `project-plan: LLM convert failed, falling back to basic parser error=${String(e)}`,
+      );
     } finally {
       if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
