@@ -170,13 +170,45 @@ function resolveWorkspace(workspace: string): string {
   return workspace.startsWith("~/") ? path.join(os.homedir(), workspace.slice(2)) : workspace;
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
+function getBackupRoot(): string {
+  return path.join(os.homedir(), ".openclaw", ".agent-pack-backups", "agent-pack-softdev-ideaforge");
+}
+
+function buildBackupFileName(filename: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${filename}.${stamp}.bak`;
+}
+
+async function backupAndWriteFile(
+  filePath: string,
+  content: string,
+  agentId: string,
+  filename: string,
+  api: OpenClawPluginApi,
+): Promise<"created" | "updated" | "unchanged"> {
+  let currentContent: string | undefined;
   try {
-    await fs.access(filePath);
-    return true;
+    currentContent = await fs.readFile(filePath, "utf8");
   } catch {
-    return false;
+    currentContent = undefined;
   }
+
+  if (currentContent === undefined) {
+    await fs.writeFile(filePath, content, "utf8");
+    return "created";
+  }
+
+  if (currentContent === content) {
+    return "unchanged";
+  }
+
+  const backupDir = path.join(getBackupRoot(), agentId);
+  await fs.mkdir(backupDir, { recursive: true });
+  const backupPath = path.join(backupDir, buildBackupFileName(filename));
+  await fs.writeFile(backupPath, currentContent, "utf8");
+  await fs.writeFile(filePath, content, "utf8");
+  api.logger.info(`agent-pack: backed up ${agentId}/${filename} -> ${backupPath}`);
+  return "updated";
 }
 
 async function installWorkspaceFiles(
@@ -188,11 +220,13 @@ async function installWorkspaceFiles(
 
   for (const [filename, content] of Object.entries(agent.files) as [string, string][]) {
     const filePath = path.join(workspaceDir, filename);
-    if (await fileExists(filePath)) {
-      api.logger.info(`agent-pack: ${agent.config.id}/${filename} already exists — skip`);
-    } else {
-      await fs.writeFile(filePath, content, "utf8");
+    const result = await backupAndWriteFile(filePath, content, agent.config.id, filename, api);
+    if (result === "created") {
       api.logger.info(`agent-pack: created ${agent.config.id}/${filename}`);
+    } else if (result === "updated") {
+      api.logger.info(`agent-pack: migrated ${agent.config.id}/${filename}`);
+    } else {
+      api.logger.info(`agent-pack: ${agent.config.id}/${filename} already up-to-date — skip`);
     }
   }
 }
@@ -393,11 +427,13 @@ export function createAgentPackService(api: OpenClawPluginApi): OpenClawPluginSe
       await fs.mkdir(mainWorkspace, { recursive: true });
       for (const [filename, content] of Object.entries(MAIN_AGENT_FILES) as [string, string][]) {
         const filePath = path.join(mainWorkspace, filename);
-        if (await fileExists(filePath)) {
-          api.logger.info(`agent-pack: main/${filename} already exists — skip`);
-        } else {
-          await fs.writeFile(filePath, content, "utf8");
+        const result = await backupAndWriteFile(filePath, content, "main", filename, api);
+        if (result === "created") {
           api.logger.info(`agent-pack: created main/${filename}`);
+        } else if (result === "updated") {
+          api.logger.info(`agent-pack: migrated main/${filename}`);
+        } else {
+          api.logger.info(`agent-pack: main/${filename} already up-to-date — skip`);
         }
       }
 
