@@ -13,6 +13,7 @@ export const en: TranslationMap = {
     na: "n/a",
     version: "Version",
     docs: "Docs",
+    projectPlan: "Project Plan",
     theme: "Theme",
     resources: "Resources",
     search: "Search",
