@@ -3,7 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { IDEAFORGE_AGENTS } from "./agents/ideaforge.js";
 import { SOFTDEV_AGENTS } from "./agents/softdev.js";
 import type { AgentDefinition, AgentFiles } from "./types.js";
@@ -410,7 +410,7 @@ async function installAgentConfig(configPath: string, api: OpenClawPluginApi): P
   }
 }
 
-export function createAgentPackService(api: OpenClawPluginApi): OpenClawPluginService {
+export function createAgentPackService(api: OpenClawPluginApi) {
   return {
     id: "agent-pack-softdev-ideaforge",
 
