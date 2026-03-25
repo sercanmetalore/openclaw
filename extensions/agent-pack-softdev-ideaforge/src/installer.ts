@@ -171,7 +171,12 @@ function resolveWorkspace(workspace: string): string {
 }
 
 function getBackupRoot(): string {
-  return path.join(os.homedir(), ".openclaw", ".agent-pack-backups", "agent-pack-softdev-ideaforge");
+  return path.join(
+    os.homedir(),
+    ".openclaw",
+    ".agent-pack-backups",
+    "agent-pack-softdev-ideaforge",
+  );
 }
 
 function buildBackupFileName(filename: string): string {
@@ -437,7 +442,9 @@ export function createAgentPackService(api: OpenClawPluginApi): OpenClawPluginSe
         }
       }
 
-      api.logger.info(`agent-pack: installation complete — ${ALL_AGENTS.length} agents + main checked`);
+      api.logger.info(
+        `agent-pack: installation complete — ${ALL_AGENTS.length} agents + main checked`,
+      );
     },
   };
 }
