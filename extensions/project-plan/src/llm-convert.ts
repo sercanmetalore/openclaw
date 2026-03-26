@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { importItemsFromPayload, type UploadPayload } from "./store.js";
 import { parseStructuredTextToItems, type StructuredImportItem } from "./text-structure.js";
 
 // ── Load embedded runner ──────────────────────────────────────────────────────
@@ -23,6 +24,11 @@ type TranscriptMessage = {
 
 type NormalizedItem = StructuredImportItem;
 type JsonNormalizationStrategy = "array" | "plan-container" | "roadmap" | "section-fallback";
+type JsonCandidateMethod = "json-direct" | "json-fallback";
+type JsonReviewDecision =
+  | { kind: "approved" }
+  | { kind: "corrected"; json: string }
+  | { kind: "failed" };
 
 async function loadRunner(): Promise<RunFn | null> {
   const require = createRequire(import.meta.url);
@@ -112,6 +118,79 @@ function extractJson(text: string): string | null {
     }
   }
   return null;
+}
+
+function truncateMiddle(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  if (maxChars < 32) {
+    return text.slice(0, maxChars);
+  }
+  const marker = "\n... [truncated] ...\n";
+  const keep = Math.floor((maxChars - marker.length) / 2);
+  const head = text.slice(0, keep);
+  const tail = text.slice(text.length - keep);
+  return `${head}${marker}${tail}`;
+}
+
+function summarizeJsonPayload(payload: unknown): string {
+  if (Array.isArray(payload)) {
+    return `Top-level array with ${payload.length} items.`;
+  }
+  if (!isRecord(payload)) {
+    return `Top-level ${typeof payload} payload.`;
+  }
+
+  const lines: string[] = [];
+  const topKeys = Object.keys(payload);
+  lines.push(`Top-level keys: ${topKeys.join(", ") || "(none)"}`);
+
+  for (const key of topKeys.slice(0, 10)) {
+    const value = payload[key];
+    if (Array.isArray(value)) {
+      const sample = value[0];
+      const sampleKeys = isRecord(sample) ? Object.keys(sample).slice(0, 8).join(", ") : "";
+      lines.push(
+        `${key}: array(${value.length})${sampleKeys ? ` sample keys: ${sampleKeys}` : ""}`,
+      );
+      continue;
+    }
+    if (isRecord(value)) {
+      lines.push(`${key}: object keys=${Object.keys(value).slice(0, 10).join(", ")}`);
+      continue;
+    }
+    lines.push(`${key}: ${typeof value}`);
+  }
+
+  const executionHierarchy = Array.isArray(payload.execution_hierarchy)
+    ? payload.execution_hierarchy
+    : Array.isArray(payload.executionHierarchy)
+      ? payload.executionHierarchy
+      : [];
+  if (executionHierarchy.length) {
+    const previews = executionHierarchy.slice(0, 4).map((entry, index) => {
+      if (!isRecord(entry)) {
+        return `Epic ${index + 1}: non-object`;
+      }
+      const title = pickRecordTitle(entry, `Epic ${index + 1}`) ?? `Epic ${index + 1}`;
+      const tasks = Array.isArray(entry.tasks) ? entry.tasks.length : 0;
+      return `${title} (tasks=${tasks})`;
+    });
+    lines.push(`Execution hierarchy preview: ${previews.join(" | ")}`);
+  }
+
+  const sprints = Array.isArray(payload.sprints) ? payload.sprints : [];
+  if (sprints.length) {
+    lines.push(`Sprints: ${sprints.length}`);
+  }
+
+  return lines.join("\n");
+}
+
+function validateImportableJson(json: string): number {
+  const parsed = JSON.parse(json) as UploadPayload;
+  return importItemsFromPayload(parsed, 0).length;
 }
 
 function extractTextContent(content: unknown): string {
@@ -280,6 +359,26 @@ function buildSharedCriticalContext(root: Record<string, unknown>): string | und
     }
   }
 
+  const meta = isRecord(root.meta) ? root.meta : undefined;
+  if (meta) {
+    const metaSummary = buildDescriptionFromRecord(meta, ["artefact_id", "created_date", "language"]);
+    if (metaSummary) {
+      blocks.push(`Plan context:\n${metaSummary}`);
+    }
+  }
+
+  const implementationDefaults = isRecord(root.implementation_defaults)
+    ? root.implementation_defaults
+    : isRecord(root.implementationDefaults)
+      ? root.implementationDefaults
+      : undefined;
+  if (implementationDefaults) {
+    const formatted = buildDescriptionFromRecord(implementationDefaults);
+    if (formatted) {
+      blocks.push(`Implementation Defaults:\n${formatted}`);
+    }
+  }
+
   const currentStateAnchors = isRecord(root.currentStateAnchors)
     ? root.currentStateAnchors
     : undefined;
@@ -300,9 +399,16 @@ function buildSharedCriticalContext(root: Record<string, unknown>): string | und
     }
   }
 
-  const acceptanceCriteria = formatMetadataValue(root.acceptanceCriteria);
+  const acceptanceCriteria = formatMetadataValue(
+    root.acceptanceCriteria ?? root.cross_cutting_acceptance_criteria,
+  );
   if (acceptanceCriteria) {
     blocks.push(`Acceptance Criteria:\n${acceptanceCriteria}`);
+  }
+
+  const lockedAssumptions = formatMetadataValue(root.locked_assumptions ?? root.lockedAssumptions);
+  if (lockedAssumptions) {
+    blocks.push(`Locked Assumptions:\n${lockedAssumptions}`);
   }
 
   return joinDescriptionBlocks(blocks);
@@ -403,12 +509,12 @@ function normalizePlanContainer(
     return sprintItems;
   }
 
-  for (const key of ["epics", "tasks", "items", "steps"]) {
+  for (const key of ["epics", "execution_hierarchy", "tasks", "items", "steps"]) {
     const section = payload[key];
     if (!Array.isArray(section)) {
       continue;
     }
-    const type = key === "epics" ? "epic" : "task";
+    const type = key === "epics" || key === "execution_hierarchy" ? "epic" : "task";
     const items = section
       .map((entry, index) =>
         type === "epic"
@@ -561,6 +667,8 @@ function parseCSV(content: string): object {
 // ── Main conversion ───────────────────────────────────────────────────────────
 
 const MAX_PROMPT_CHARS = 20_000;
+const MAX_JSON_REVIEW_SOURCE_CHARS = 28_000;
+const MAX_JSON_REVIEW_CANDIDATE_CHARS = 28_000;
 
 const CONVERT_PROMPT = (filename: string, content: string) =>
   `
@@ -618,9 +726,232 @@ const CONVERT_SYSTEM_PROMPT = [
   "Do not include markdown code fences.",
 ].join("\n");
 
+const JSON_REVIEW_SYSTEM_PROMPT = [
+  "You audit and repair project-plan hierarchy conversions.",
+  "Return ONLY valid JSON.",
+  'Use this exact response shape: {"approved":true} when the candidate already preserves the source hierarchy well enough.',
+  'If the candidate needs fixes, return {"approved":false,"items":[...]} using the OpenClaw project-plan import shape.',
+  "Allowed item types inside items: epic, task, subtask.",
+  "Preserve source ordering and parent-child relationships.",
+  "Do not drop important metadata; keep it in description fields.",
+  "Do not include markdown code fences or prose outside JSON.",
+].join("\n");
+
+function buildJsonReviewPrompt(params: {
+  candidateJson: string;
+  candidateMethod: JsonCandidateMethod;
+  filename: string;
+  payload: unknown;
+  sourceContent: string;
+}): string {
+  const { candidateJson, candidateMethod, filename, payload, sourceContent } = params;
+  const sourceSummary = summarizeJsonPayload(payload);
+  const sourceExcerpt = truncateMiddle(sourceContent, MAX_JSON_REVIEW_SOURCE_CHARS);
+  const candidateExcerpt = truncateMiddle(candidateJson, MAX_JSON_REVIEW_CANDIDATE_CHARS);
+  return `
+You are reviewing a JSON import candidate for OpenClaw Project Plan.
+
+Task:
+1. Inspect the source JSON shape and the candidate hierarchy.
+2. Decide whether the candidate already preserves the intended epic > task > subtask ordering.
+3. If the candidate is already structurally correct, return {"approved":true}.
+4. If the candidate is wrong or lossy, return {"approved":false,"items":[...]} with the corrected hierarchy.
+
+Rules:
+- Prefer the existing candidate unless the source clearly implies a different hierarchy.
+- Keep the original order from the source JSON.
+- Preserve metadata in description instead of inventing new fields.
+- Never return partial JSON fragments.
+
+File name: ${filename}
+Candidate origin: ${candidateMethod}
+
+Source summary:
+${sourceSummary}
+
+Source JSON excerpt:
+${sourceExcerpt}
+
+Candidate plan JSON excerpt:
+${candidateExcerpt}
+`.trim();
+}
+
+async function runPrimaryAgentJsonTransform(params: {
+  api: OpenClawPluginApi;
+  prompt: string;
+  sessionKey: string;
+  systemPrompt: string;
+  timeoutMs: number;
+}): Promise<string | null> {
+  const { api, prompt, sessionKey, systemPrompt, timeoutMs } = params;
+  const { runId } = await api.runtime.subagent.run({
+    sessionKey,
+    idempotencyKey: crypto.randomUUID(),
+    message: prompt,
+    extraSystemPrompt: systemPrompt,
+  });
+  const result = await api.runtime.subagent.waitForRun({
+    runId,
+    timeoutMs,
+  });
+  if (result.status !== "ok") {
+    return null;
+  }
+  const transcript = await api.runtime.subagent.getSessionMessages({
+    sessionKey,
+    limit: 200,
+  });
+  const text = extractLastAssistantText(transcript.messages);
+  const extracted = extractJson(text);
+  if (!extracted) {
+    return null;
+  }
+  JSON.parse(extracted);
+  return extracted;
+}
+
+async function runEmbeddedJsonTransform(params: {
+  api: OpenClawPluginApi;
+  prompt: string;
+  timeoutMs: number;
+}): Promise<string | null> {
+  const { api, prompt, timeoutMs } = params;
+  const runner = await loadRunner();
+  if (!runner) {
+    return null;
+  }
+
+  let tmpDir: string | null = null;
+  try {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pp-convert-"));
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cfg = (api as any).config;
+    const result = await runner({
+      sessionId: `pp-convert-${Date.now()}`,
+      sessionFile,
+      workspaceDir: cfg?.agents?.defaults?.workspace ?? process.cwd(),
+      config: cfg,
+      prompt,
+      timeoutMs,
+      runId: crypto.randomUUID(),
+      disableTools: true,
+      streamParams: { maxTokens: 4096 },
+    });
+    const text = result.payloads?.find((p) => p.text)?.text ?? "";
+    const extracted = extractJson(text);
+    if (!extracted) {
+      return null;
+    }
+    JSON.parse(extracted);
+    return extracted;
+  } finally {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+}
+
+async function runLlmJsonTransform(params: {
+  api: OpenClawPluginApi;
+  logContext: string;
+  prompt: string;
+  sessionKey: string;
+  systemPrompt: string;
+  timeoutMs: number;
+}): Promise<string | null> {
+  const { api, logContext, prompt, sessionKey, systemPrompt, timeoutMs } = params;
+  try {
+    const primary = await runPrimaryAgentJsonTransform({
+      api,
+      prompt,
+      sessionKey,
+      systemPrompt,
+      timeoutMs,
+    });
+    if (primary) {
+      return primary;
+    }
+  } catch (error) {
+    api.logger.warn(
+      `project-plan: ${logContext} primary agent failed, trying embedded runner error=${String(error)}`,
+    );
+  }
+
+  try {
+    return await runEmbeddedJsonTransform({
+      api,
+      prompt,
+      timeoutMs: Math.min(timeoutMs, 60_000),
+    });
+  } catch (error) {
+    api.logger.warn(
+      `project-plan: ${logContext} embedded runner failed error=${String(error)}`,
+    );
+    return null;
+  }
+}
+
+async function reviewJsonCandidateWithLlm(params: {
+  api: OpenClawPluginApi;
+  candidateJson: string;
+  candidateMethod: JsonCandidateMethod;
+  filename: string;
+  payload: unknown;
+  sourceContent: string;
+}): Promise<JsonReviewDecision> {
+  const { api, candidateJson, candidateMethod, filename, payload, sourceContent } = params;
+  const prompt = buildJsonReviewPrompt({
+    candidateJson,
+    candidateMethod,
+    filename,
+    payload,
+    sourceContent,
+  });
+  const sessionKey = `agent:${resolvePrimaryAgentId(api)}:project-plan-json-review`;
+  const extracted = await runLlmJsonTransform({
+    api,
+    logContext: "JSON review",
+    prompt,
+    sessionKey,
+    systemPrompt: JSON_REVIEW_SYSTEM_PROMPT,
+    timeoutMs: 90_000,
+  });
+  if (!extracted) {
+    return { kind: "failed" };
+  }
+
+  try {
+    const parsed = JSON.parse(extracted);
+    if (isRecord(parsed) && parsed.approved === true) {
+      return { kind: "approved" };
+    }
+    if (isRecord(parsed) && parsed.approved === false && Array.isArray(parsed.items)) {
+      const correctedJson = JSON.stringify({ items: parsed.items });
+      validateImportableJson(correctedJson);
+      return { kind: "corrected", json: correctedJson };
+    }
+    validateImportableJson(extracted);
+    return { kind: "corrected", json: extracted };
+  } catch (error) {
+    api.logger.warn(`project-plan: JSON review result unusable error=${String(error)}`);
+    return { kind: "failed" };
+  }
+}
+
 export type ConvertResult = {
   json: string;
-  method: "llm" | "basic" | "json-fallback" | "text-structure";
+  method:
+    | "llm"
+    | "basic"
+    | "json-direct"
+    | "json-direct+llm-review"
+    | "json-direct+llm-verified"
+    | "json-fallback"
+    | "json-fallback+llm-review"
+    | "json-fallback+llm-verified"
+    | "text-structure";
 };
 
 export async function convertFileToItems(params: {
@@ -634,13 +965,39 @@ export async function convertFileToItems(params: {
   if (ext === ".json" || ext === ".jsonc" || ext === ".json5") {
     try {
       const parsed = JSON.parse(content);
-      const normalized = normalizeJsonPayloadToItems(parsed);
-      if (normalized.strategy !== "section-fallback") {
-        return { json: JSON.stringify({ items: normalized.items }), method: "json-fallback" };
+      let candidateJson: string;
+      let candidateMethod: JsonCandidateMethod;
+
+      try {
+        validateImportableJson(content);
+        candidateJson = content;
+        candidateMethod = "json-direct";
+      } catch {
+        const normalized = normalizeJsonPayloadToItems(parsed);
+        candidateJson = JSON.stringify({ items: normalized.items });
+        candidateMethod = "json-fallback";
+        if (normalized.strategy === "section-fallback") {
+          api.logger.warn(
+            "project-plan: JSON fallback found only low-confidence section items, sending candidate to LLM review",
+          );
+        }
       }
-      api.logger.warn(
-        "project-plan: JSON fallback found only low-confidence section items, escalating to LLM",
-      );
+
+      const reviewed = await reviewJsonCandidateWithLlm({
+        api,
+        candidateJson,
+        candidateMethod,
+        filename,
+        payload: parsed,
+        sourceContent: content,
+      });
+      if (reviewed.kind === "corrected") {
+        return { json: reviewed.json, method: `${candidateMethod}+llm-review` };
+      }
+      if (reviewed.kind === "approved") {
+        return { json: candidateJson, method: `${candidateMethod}+llm-verified` };
+      }
+      return { json: candidateJson, method: candidateMethod };
     } catch (error) {
       api.logger.warn(
         `project-plan: JSON fallback normalize failed, trying LLM error=${String(error)}`,
@@ -667,70 +1024,16 @@ export async function convertFileToItems(params: {
   const primaryAgentId = resolvePrimaryAgentId(api);
   const sessionKey = `agent:${primaryAgentId}:project-plan-convert`;
 
-  // ── Try default subagent conversion first (blocking) ────────────────────
-  try {
-    const { runId } = await api.runtime.subagent.run({
-      sessionKey,
-      idempotencyKey: crypto.randomUUID(),
-      message: CONVERT_PROMPT(filename, content),
-      extraSystemPrompt: CONVERT_SYSTEM_PROMPT,
-    });
-    const result = await api.runtime.subagent.waitForRun({
-      runId,
-      timeoutMs: 90_000,
-    });
-    if (result.status === "ok") {
-      const transcript = await api.runtime.subagent.getSessionMessages({
-        sessionKey,
-        limit: 200,
-      });
-      const text = extractLastAssistantText(transcript.messages);
-      const extracted = extractJson(text);
-      if (extracted) {
-        JSON.parse(extracted);
-        return { json: extracted, method: "llm" };
-      }
-    }
-  } catch (e) {
-    api.logger.warn(
-      `project-plan: default agent convert failed, trying embedded runner error=${String(e)}`,
-    );
-  }
-
-  // ── Try LLM conversion ───────────────────────────────────────────────────
-  const runner = await loadRunner();
-  if (runner) {
-    let tmpDir: string | null = null;
-    try {
-      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "pp-convert-"));
-      const sessionFile = path.join(tmpDir, "session.jsonl");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const cfg = (api as any).config;
-      const result = await runner({
-        sessionId: `pp-convert-${Date.now()}`,
-        sessionFile,
-        workspaceDir: cfg?.agents?.defaults?.workspace ?? process.cwd(),
-        config: cfg,
-        prompt: CONVERT_PROMPT(filename, content),
-        timeoutMs: 60_000,
-        runId: crypto.randomUUID(),
-        disableTools: true,
-        streamParams: { maxTokens: 4096 },
-      });
-      const text = result.payloads?.find((p) => p.text)?.text ?? "";
-      const extracted = extractJson(text);
-      if (extracted) {
-        // Validate it can be parsed
-        JSON.parse(extracted);
-        return { json: extracted, method: "llm" };
-      }
-    } catch (e) {
-      api.logger.warn(
-        `project-plan: LLM convert failed, falling back to basic parser error=${String(e)}`,
-      );
-    } finally {
-      if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-    }
+  const llmJson = await runLlmJsonTransform({
+    api,
+    logContext: "convert",
+    prompt: CONVERT_PROMPT(filename, content),
+    sessionKey,
+    systemPrompt: CONVERT_SYSTEM_PROMPT,
+    timeoutMs: 90_000,
+  });
+  if (llmJson) {
+    return { json: llmJson, method: "llm" };
   }
 
   // ── Basic fallback parsers ───────────────────────────────────────────────

@@ -1,6 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { normalizeJsonPayloadToItems } from "./llm-convert.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { convertFileToItems, normalizeJsonPayloadToItems } from "./llm-convert.js";
 import { parseStructuredTextToItems } from "./text-structure.js";
+
+function createConvertTestApi(assistantText: string): OpenClawPluginApi {
+  return {
+    config: {
+      agents: {
+        defaults: {
+          id: "main",
+        },
+      },
+    },
+    runtime: {
+      subagent: {
+        run: async () => ({ runId: "run-1" }),
+        waitForRun: async () => ({ status: "ok" }),
+        getSessionMessages: async () => ({
+          messages: [{ role: "assistant", content: assistantText }],
+        }),
+      },
+    },
+    logger: {
+      warn: () => undefined,
+      info: () => undefined,
+      error: () => undefined,
+      debug: () => undefined,
+    },
+  } as unknown as OpenClawPluginApi;
+}
 
 describe("project-plan JSON fallback normalization", () => {
   it("normalizes sprint -> epic -> task -> subtask payloads without LLM", () => {
@@ -173,6 +201,133 @@ describe("project-plan JSON fallback normalization", () => {
 
     expect(normalized.strategy).toBe("section-fallback");
     expect(normalized.items.map((item) => item.title)).toEqual(["Interfaces", "Tables"]);
+  });
+
+  it("normalizes execution_hierarchy plans instead of falling back to metadata sections", () => {
+    const normalized = normalizeJsonPayloadToItems({
+      meta: {
+        project: "GptHouseFlow",
+        initiative: "Self-Hosted Tools and Code Interpreter Runtime",
+        status: "execution-ready",
+        version: "1.0.0",
+        description: "Execution-ready master plan",
+      },
+      implementation_defaults: {
+        executor_strategy: "Piston ve Judge0 birlikte desteklenecek",
+        session_model: "Stateful session",
+      },
+      cross_cutting_acceptance_criteria: ["Piston ve Judge0 ayni stack icinde calisir"],
+      locked_assumptions: ["v1 public experience Python-first"],
+      execution_hierarchy: [
+        {
+          epic_id: "EPIC-GHF-CI-001",
+          title: "Mimari Kontratlar ve Veri Modeli",
+          summary: "Ortak execution kontratlari netlestirilir.",
+          tasks: [
+            {
+              task_id: "TASK-GHF-CI-001",
+              title: "Execution Domain ve Kontratlar",
+              summary: "Backendlerden bagimsiz ortak tipler tanimlanir.",
+              subtasks: [
+                {
+                  subtask_id: "SUBTASK-GHF-CI-001A",
+                  title: "Ortak execution type sistemi ve capability modeli tanimla",
+                  acceptance_criteria: [
+                    "Client'lar ayni result tipini dondurebilir",
+                    "Node implementasyonlari backend-ozel parse etmek zorunda kalmaz",
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalized.strategy).toBe("plan-container");
+    expect(normalized.items).toHaveLength(1);
+    expect(normalized.items[0]?.title).toBe("Mimari Kontratlar ve Veri Modeli");
+    expect(normalized.items[0]?.type).toBe("epic");
+    expect(normalized.items[0]?.children?.[0]?.title).toBe("Execution Domain ve Kontratlar");
+    expect(normalized.items[0]?.children?.[0]?.type).toBe("task");
+    expect(normalized.items[0]?.children?.[0]?.children?.[0]?.title).toBe(
+      "Ortak execution type sistemi ve capability modeli tanimla",
+    );
+    expect(normalized.items[0]?.description).toContain("Plan context:");
+    expect(normalized.items[0]?.description).toContain("Implementation Defaults:");
+    expect(normalized.items[0]?.description).toContain("Acceptance Criteria:");
+    expect(normalized.items[0]?.description).toContain("Locked Assumptions:");
+  });
+});
+
+describe("project-plan JSON LLM review", () => {
+  it("routes direct JSON imports through LLM verification", async () => {
+    const api = createConvertTestApi('{"approved":true}');
+    const payload = {
+      items: [
+        {
+          title: "Platform",
+          type: "epic",
+          children: [{ title: "Build ingestion pipeline", type: "task" }],
+        },
+      ],
+    };
+
+    const result = await convertFileToItems({
+      content: JSON.stringify(payload),
+      filename: "plan.json",
+      api,
+    });
+
+    expect(result.method).toBe("json-direct+llm-verified");
+    expect(JSON.parse(result.json)).toEqual(payload);
+  });
+
+  it("routes normalized JSON imports through LLM verification", async () => {
+    const api = createConvertTestApi('{"approved":true}');
+
+    const result = await convertFileToItems({
+      content: JSON.stringify({
+        execution_hierarchy: [
+          {
+            title: "Mimari Kontratlar ve Veri Modeli",
+            tasks: [
+              {
+                title: "Execution Domain ve Kontratlar",
+                subtasks: [{ title: "Capability modeli tanimla" }],
+              },
+            ],
+          },
+        ],
+      }),
+      filename: "plan.json",
+      api,
+    });
+
+    const parsed = JSON.parse(result.json) as { items: Array<{ title: string }> };
+    expect(result.method).toBe("json-fallback+llm-verified");
+    expect(parsed.items[0]?.title).toBe("Mimari Kontratlar ve Veri Modeli");
+  });
+
+  it("keeps the deterministic JSON candidate when LLM review returns unusable output", async () => {
+    const api = createConvertTestApi('{"approved":false,"items":"broken"}');
+
+    const result = await convertFileToItems({
+      content: JSON.stringify({
+        execution_hierarchy: [
+          {
+            title: "Mimari Kontratlar ve Veri Modeli",
+            tasks: [{ title: "Execution Domain ve Kontratlar" }],
+          },
+        ],
+      }),
+      filename: "plan.json",
+      api,
+    });
+
+    const parsed = JSON.parse(result.json) as { items: Array<{ title: string }> };
+    expect(result.method).toBe("json-fallback");
+    expect(parsed.items[0]?.title).toBe("Mimari Kontratlar ve Veri Modeli");
   });
 });
 

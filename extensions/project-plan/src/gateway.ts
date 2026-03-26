@@ -326,26 +326,16 @@ export function registerGatewayMethods(
         return;
       }
 
-      // Try direct parse+validate; on failure use LLM conversion
-      let jsonStr = payloadText;
-      let convertMethod = "direct";
-      let directOk = false;
+      // Route every upload through the shared conversion pipeline so JSON review stays consistent.
+      let jsonStr: string;
+      let convertMethod: string;
       try {
-        const parsed = JSON.parse(payloadText);
-        importItemsFromPayload(parsed as unknown as UploadPayload, 0); // dry-run
-        directOk = true;
+        const result = await convertFileToItems({ content: payloadText, filename, api });
+        jsonStr = result.json;
+        convertMethod = result.method;
       } catch {
-        /* non-standard format — fall through to LLM */
-      }
-      if (!directOk) {
-        try {
-          const result = await convertFileToItems({ content: payloadText, filename, api });
-          jsonStr = result.json;
-          convertMethod = result.method;
-        } catch {
-          req.respond(false, undefined, { message: "Could not parse or convert payload" });
-          return;
-        }
+        req.respond(false, undefined, { message: "Could not parse or convert payload" });
+        return;
       }
 
       let payload: unknown;
@@ -364,7 +354,7 @@ export function registerGatewayMethods(
       plan.logs.push(
         createLog({
           level: "info",
-          message: `Imported ${newItems.length} items${convertMethod !== "direct" ? ` (converted via ${convertMethod})` : ""}.`,
+          message: `Imported ${newItems.length} items (processed via ${convertMethod}).`,
         }),
       );
       await savePlan(dir, plan, opts);

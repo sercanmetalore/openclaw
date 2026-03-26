@@ -378,33 +378,13 @@ export function createHttpHandler(params: {
           const plan = await loadPlan(stateDir, planId);
           if (!plan) return (err(res, 404, "Plan not found"), true);
           const filename = body.filename || "upload.json";
-          const ext = filename.split(".").pop()?.toLowerCase() ?? "json";
-          let jsonStr = body.payload;
-          let convertMethod: string = "direct";
+          let jsonStr: string;
+          let convertMethod: string;
 
           try {
-            if (ext === "json") {
-              // Try direct import first; otherwise run the JSON/text normalization pipeline.
-              let directOk = false;
-              try {
-                const parsed = JSON.parse(body.payload);
-                importItemsFromPayload(parsed as unknown as UploadPayload, 0); // dry-run to validate
-                jsonStr = body.payload;
-                directOk = true;
-              } catch {
-                // Non-standard or wrong-shape JSON — normalize before importing.
-              }
-              if (!directOk) {
-                const result = await convertFileToItems({ content: body.payload, filename, api });
-                jsonStr = result.json;
-                convertMethod = result.method;
-              }
-            } else {
-              // Non-JSON file — use LLM (or basic parser fallback) to convert.
-              const result = await convertFileToItems({ content: body.payload, filename, api });
-              jsonStr = result.json;
-              convertMethod = result.method;
-            }
+            const result = await convertFileToItems({ content: body.payload, filename, api });
+            jsonStr = result.json;
+            convertMethod = result.method;
           } catch (conversionError) {
             return (err(res, 400, `Import failed: ${String(conversionError)}`), true);
           }
@@ -429,7 +409,7 @@ export function createHttpHandler(params: {
           plan.logs.push(
             createLog({
               level: "info",
-              message: `Imported ${newItems.length} items from ${filename}${convertMethod !== "direct" ? ` (converted via ${convertMethod})` : ""}.`,
+              message: `Imported ${newItems.length} items from ${filename} (processed via ${convertMethod}).`,
             }),
           );
           await savePlan(stateDir, plan, opts);
