@@ -71,6 +71,24 @@ describe("project-plan completion classification", () => {
     ).toBe(true);
   });
 
+  it("detects 429 quota/capacity run errors as transient", () => {
+    expect(
+      isTransientOverloadRunResult({
+        status: "error",
+        error:
+          "Cloud Code Assist API error (429): You have exhausted your capacity on this model. Your quota will reset after 58s.",
+      }),
+    ).toBe(true);
+  });
+
+  it("detects 429 quota/capacity completion reasons as transient", () => {
+    expect(
+      isTransientOverloadCompletionReason(
+        "Agent run error: Cloud Code Assist API error (429): You have exhausted your capacity on this model. Your quota will reset after 58s.",
+      ),
+    ).toBe(true);
+  });
+
   it("does not treat generic completion failures as transient overload", () => {
     expect(
       isTransientOverloadCompletionReason("Agent run error: permission denied while writing files"),

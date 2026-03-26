@@ -19,6 +19,7 @@ import type {
 const DEFAULT_ITEM_TIMEOUT_MINUTES = 30;
 const OVERLOAD_MAX_RETRIES = 2;
 const OVERLOAD_RETRY_BASE_DELAY_MS = 2_000;
+const TRANSIENT_CAPACITY_MAX_DELAY_MS = 120_000;
 
 // ── In-memory run state ───────────────────────────────────────────────────────
 
@@ -95,12 +96,117 @@ function isOverloadedRunError(error: unknown): boolean {
   return isOverloadedRunError(shaped.error) || isOverloadedRunError(shaped.details);
 }
 
+function isCapacityRateLimitError(error: unknown): boolean {
+  if (typeof error === "string") {
+    const text = error.trim();
+    const normalized = text.toLowerCase();
+    if (
+      normalized.includes("cloud code assist api error (429)") ||
+      normalized.includes("rate limit") ||
+      normalized.includes("quota") ||
+      (normalized.includes("capacity") && normalized.includes("exhausted"))
+    ) {
+      return true;
+    }
+    if (text.startsWith("{") || text.startsWith("[")) {
+      try {
+        return isCapacityRateLimitError(JSON.parse(text));
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  if (Array.isArray(error)) {
+    return error.some((entry) => isCapacityRateLimitError(entry));
+  }
+
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const shaped = error as {
+    type?: unknown;
+    message?: unknown;
+    status?: unknown;
+    code?: unknown;
+    error?: unknown;
+    details?: unknown;
+  };
+
+  if (typeof shaped.status === "number" && shaped.status === 429) {
+    return true;
+  }
+  if (typeof shaped.code === "number" && shaped.code === 429) {
+    return true;
+  }
+  if (typeof shaped.type === "string" && /rate[_-]?limit|quota/i.test(shaped.type)) {
+    return true;
+  }
+  if (typeof shaped.message === "string" && isCapacityRateLimitError(shaped.message)) {
+    return true;
+  }
+
+  return isCapacityRateLimitError(shaped.error) || isCapacityRateLimitError(shaped.details);
+}
+
+function extractRetryDelayMsFromErrorMessage(message: string | undefined): number | null {
+  if (!message) {
+    return null;
+  }
+  const secondsMatch = message.match(/(?:reset|retry)\s+after\s+(\d+)\s*s(?:ec(?:ond)?s?)?/i);
+  if (secondsMatch) {
+    const seconds = Number(secondsMatch[1]);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.min(seconds * 1_000, TRANSIENT_CAPACITY_MAX_DELAY_MS);
+    }
+  }
+
+  const wordSecondsMatch = message.match(/(?:reset|retry)\s+after\s+(\d+)\s*seconds?/i);
+  if (wordSecondsMatch) {
+    const seconds = Number(wordSecondsMatch[1]);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.min(seconds * 1_000, TRANSIENT_CAPACITY_MAX_DELAY_MS);
+    }
+  }
+
+  return null;
+}
+
+function resolveTransientRetryDelayMs(params: {
+  errorText?: string;
+  fallbackDelayMs: number;
+}): number {
+  const { errorText, fallbackDelayMs } = params;
+  return extractRetryDelayMsFromErrorMessage(errorText) ?? fallbackDelayMs;
+}
+
+function resolveTimeoutFallbackDelayMs(params: {
+  timeoutMs: number;
+  usedFallback: boolean;
+}): number {
+  const { timeoutMs, usedFallback } = params;
+  // Scale cooldown with configured timeout so slow models are retried less aggressively.
+  const baseDelayMs = Math.min(Math.max(Math.round(timeoutMs * 0.02), 3_000), 60_000);
+  if (!usedFallback) {
+    return baseDelayMs;
+  }
+  return Math.min(baseDelayMs * 2, TRANSIENT_CAPACITY_MAX_DELAY_MS);
+}
+
 export function isTransientOverloadRunResult(result: { status: string; error?: unknown }): boolean {
-  return result.status === "error" && isOverloadedRunError(result.error);
+  return (
+    result.status === "error" &&
+    (isOverloadedRunError(result.error) || isCapacityRateLimitError(result.error))
+  );
 }
 
 export function isTransientOverloadCompletionReason(reason: string): boolean {
-  return /Agent run error:/i.test(reason) && /overloaded_error|\boverloaded\b/i.test(reason);
+  return (
+    /Agent run error:/i.test(reason) &&
+    (/overloaded_error|\boverloaded\b/i.test(reason) || isCapacityRateLimitError(reason))
+  );
 }
 
 function isYieldOrDelegationIssue(message: string | undefined): boolean {
@@ -305,6 +411,31 @@ function chooseExecutionAgentId(params: {
   }
 
   return { agentId: defaultAgentId, reason: "fallback-default" };
+}
+
+function chooseFallbackExecutionAgentId(params: {
+  api: OpenClawPluginApi;
+  plan: ProjectPlanRecord;
+  primaryAgentId: string;
+}): { agentId: string; reason: string } | undefined {
+  const { api, plan, primaryAgentId } = params;
+  const defaultAgentId = plan.settings.defaultAgentId ?? "main";
+  const configuredIds = new Set(
+    (api.config.agents?.list ?? [])
+      .map((entry) => (typeof entry?.id === "string" ? entry.id.trim() : ""))
+      .filter(Boolean),
+  );
+  configuredIds.add(defaultAgentId);
+  configuredIds.add("main");
+
+  if (primaryAgentId !== defaultAgentId && configuredIds.has(defaultAgentId)) {
+    return { agentId: defaultAgentId, reason: "timeout-fallback-default-agent" };
+  }
+  if (primaryAgentId !== "main" && configuredIds.has("main")) {
+    return { agentId: "main", reason: "timeout-fallback-main" };
+  }
+
+  return undefined;
 }
 
 const runners = new Map<string, RunnerState>();
@@ -523,26 +654,49 @@ async function runPlanLoop(params: {
         break;
       }
 
+      const route = chooseExecutionAgentId({ api, plan, item: nextItem });
+      const timeoutFallback = chooseFallbackExecutionAgentId({
+        api,
+        plan,
+        primaryAgentId: route.agentId,
+      });
+
+      plan.logs.push(
+        createLog({
+          level: "info",
+          message: `Routing: ${nextItem.title} -> ${route.agentId} (${route.reason})`,
+          itemId: nextItem.id,
+        }),
+      );
+      if (timeoutFallback) {
+        plan.logs.push(
+          createLog({
+            level: "info",
+            message: `Timeout fallback: ${nextItem.title} -> ${timeoutFallback.agentId} (${timeoutFallback.reason})`,
+            itemId: nextItem.id,
+          }),
+        );
+      }
+
       await processItem({
         plan,
         item: nextItem,
-        sessionKey: (() => {
-          const route = chooseExecutionAgentId({ api, plan, item: nextItem });
-          plan.logs.push(
-            createLog({
-              level: "info",
-              message: `Routing: ${nextItem.title} -> ${route.agentId} (${route.reason})`,
-              itemId: nextItem.id,
-            }),
-          );
-          return buildSessionKey({
-            agentId: route.agentId,
-            itemScopedSessions: plan.settings.itemScopedSessions !== false,
-            planId: plan.id,
-            item: nextItem,
-            runSessionId,
-          });
-        })(),
+        sessionKey: buildSessionKey({
+          agentId: route.agentId,
+          itemScopedSessions: plan.settings.itemScopedSessions !== false,
+          planId: plan.id,
+          item: nextItem,
+          runSessionId,
+        }),
+        fallbackSessionKey: timeoutFallback
+          ? buildSessionKey({
+              agentId: timeoutFallback.agentId,
+              itemScopedSessions: plan.settings.itemScopedSessions !== false,
+              planId: plan.id,
+              item: nextItem,
+              runSessionId,
+            })
+          : undefined,
         projectPath,
         stateDir,
         api,
@@ -572,6 +726,7 @@ async function processItem(params: {
   plan: ProjectPlanRecord;
   item: ProjectPlanItem;
   sessionKey: string;
+  fallbackSessionKey?: string;
   projectPath: string;
   stateDir: string;
   api: OpenClawPluginApi;
@@ -579,8 +734,18 @@ async function processItem(params: {
   timeoutMs: number;
   maxLog?: number;
 }): Promise<void> {
-  const { plan, item, sessionKey, projectPath, stateDir, api, runnerState, timeoutMs, maxLog } =
-    params;
+  const {
+    plan,
+    item,
+    sessionKey,
+    fallbackSessionKey,
+    projectPath,
+    stateDir,
+    api,
+    runnerState,
+    timeoutMs,
+    maxLog,
+  } = params;
 
   item.status = "in progress";
   item.updatedAt = Date.now();
@@ -590,6 +755,8 @@ async function processItem(params: {
   await savePlan(stateDir, plan, { maxLogEntries: maxLog });
 
   try {
+    let activeSessionKey = sessionKey;
+    let usedTimeoutFallback = false;
     let runStartedAt = Date.now();
     let result: Awaited<ReturnType<OpenClawPluginApi["runtime"]["subagent"]["waitForRun"]>> = {
       status: "timeout",
@@ -598,13 +765,13 @@ async function processItem(params: {
     for (let attempt = 0; attempt <= OVERLOAD_MAX_RETRIES; attempt += 1) {
       runStartedAt = Date.now();
       const { runId } = await api.runtime.subagent.run({
-        sessionKey,
+        sessionKey: activeSessionKey,
         idempotencyKey: crypto.randomUUID(),
         message: buildItemMessage(plan, item, projectPath),
         extraSystemPrompt: buildSystemPrompt(projectPath),
       });
-      runnerState.activeRun = { runId, sessionKey };
-      addTrackedRun(runnerState, runId, sessionKey);
+      runnerState.activeRun = { runId, sessionKey: activeSessionKey };
+      addTrackedRun(runnerState, runId, activeSessionKey);
       runnerState.abortRequested = false;
       if (runnerState.stopRequested) {
         requestActiveRunAbort({ api, planId: plan.id, state: runnerState });
@@ -619,7 +786,7 @@ async function processItem(params: {
       });
 
       if (result.status !== "timeout") {
-        deleteTrackedRun(runnerState, runId, sessionKey);
+        deleteTrackedRun(runnerState, runId, activeSessionKey);
       }
 
       if (runnerState.stopRequested || !isTransientOverloadRunResult(result)) {
@@ -629,16 +796,63 @@ async function processItem(params: {
         break;
       }
 
-      const delayMs = OVERLOAD_RETRY_BASE_DELAY_MS * (attempt + 1);
+      const delayMs = resolveTransientRetryDelayMs({
+        errorText: typeof result.error === "string" ? result.error : undefined,
+        fallbackDelayMs: OVERLOAD_RETRY_BASE_DELAY_MS * (attempt + 1),
+      });
       plan.logs.push(
         createLog({
           level: "warn",
-          message: `Transient overload: retrying ${item.title} (${attempt + 1}/${OVERLOAD_MAX_RETRIES})`,
+          message: `Transient capacity: retrying ${item.title} (${attempt + 1}/${OVERLOAD_MAX_RETRIES}, wait=${delayMs}ms)`,
           itemId: item.id,
         }),
       );
       await savePlan(stateDir, plan, { maxLogEntries: maxLog });
       await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+
+    if (
+      !runnerState.stopRequested &&
+      result.status === "timeout" &&
+      fallbackSessionKey &&
+      fallbackSessionKey !== activeSessionKey
+    ) {
+      usedTimeoutFallback = true;
+      plan.logs.push(
+        createLog({
+          level: "warn",
+          message: `Timeout fallback: retrying ${item.title} with fallback agent/model`,
+          itemId: item.id,
+        }),
+      );
+      await savePlan(stateDir, plan, { maxLogEntries: maxLog });
+
+      activeSessionKey = fallbackSessionKey;
+      runStartedAt = Date.now();
+      const { runId } = await api.runtime.subagent.run({
+        sessionKey: activeSessionKey,
+        idempotencyKey: crypto.randomUUID(),
+        message: buildItemMessage(plan, item, projectPath),
+        extraSystemPrompt: buildSystemPrompt(projectPath),
+      });
+      runnerState.activeRun = { runId, sessionKey: activeSessionKey };
+      addTrackedRun(runnerState, runId, activeSessionKey);
+      runnerState.abortRequested = false;
+      if (runnerState.stopRequested) {
+        requestActiveRunAbort({ api, planId: plan.id, state: runnerState });
+      }
+
+      result = await waitForRunWithStopPolling({
+        api,
+        runId,
+        planId: plan.id,
+        runnerState,
+        timeoutMs,
+      });
+
+      if (result.status !== "timeout") {
+        deleteTrackedRun(runnerState, runId, activeSessionKey);
+      }
     }
 
     if (runnerState.stopRequested) {
@@ -654,10 +868,26 @@ async function processItem(params: {
       return;
     }
 
+    if (result.status === "timeout" && usedTimeoutFallback) {
+      item.status = "to do";
+      item.updatedAt = Date.now();
+      const delayMs = resolveTimeoutFallbackDelayMs({ timeoutMs, usedFallback: true });
+      plan.logs.push(
+        createLog({
+          level: "warn",
+          message: `Timeout after fallback: deferring ${item.title} for adaptive retry (wait=${delayMs}ms)`,
+          itemId: item.id,
+        }),
+      );
+      await savePlan(stateDir, plan, { maxLogEntries: maxLog });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return;
+    }
+
     if (result.status === "ok") {
       let assistantOutcome = await getLastAssistantOutcomeWithRetry({
         api,
-        sessionKey,
+        sessionKey: activeSessionKey,
         attempts: 30,
         delayMs: 500,
         sinceTimestampMs: runStartedAt,
@@ -679,7 +909,7 @@ async function processItem(params: {
 
         const recoveryStartedAt = Date.now();
         const { runId: recoveryRunId } = await api.runtime.subagent.run({
-          sessionKey,
+          sessionKey: activeSessionKey,
           idempotencyKey: crypto.randomUUID(),
           message: [
             `Retry the current item now: ${item.title}`,
@@ -691,7 +921,7 @@ async function processItem(params: {
           extraSystemPrompt: buildSystemPrompt(projectPath),
         });
 
-        runnerState.activeRun = { runId: recoveryRunId, sessionKey };
+        runnerState.activeRun = { runId: recoveryRunId, sessionKey: activeSessionKey };
         runnerState.abortRequested = false;
         if (runnerState.stopRequested) {
           requestActiveRunAbort({ api, planId: plan.id, state: runnerState });
@@ -708,7 +938,7 @@ async function processItem(params: {
         if (recoveryResult.status === "ok") {
           assistantOutcome = await getLastAssistantOutcomeWithRetry({
             api,
-            sessionKey,
+            sessionKey: activeSessionKey,
             attempts: 30,
             delayMs: 500,
             sinceTimestampMs: recoveryStartedAt,
@@ -733,15 +963,19 @@ async function processItem(params: {
       } else if (isTransientOverloadCompletionReason(completion.reason)) {
         item.status = "to do";
         item.updatedAt = Date.now();
+        const delayMs = resolveTransientRetryDelayMs({
+          errorText: completion.reason,
+          fallbackDelayMs: OVERLOAD_RETRY_BASE_DELAY_MS,
+        });
         plan.logs.push(
           createLog({
             level: "warn",
-            message: `Transient overload: deferring ${item.title} for retry (${completion.reason})`,
+            message: `Transient capacity: deferring ${item.title} for retry (${completion.reason}, wait=${delayMs}ms)`,
             itemId: item.id,
           }),
         );
         await savePlan(stateDir, plan, { maxLogEntries: maxLog });
-        await new Promise((resolve) => setTimeout(resolve, OVERLOAD_RETRY_BASE_DELAY_MS));
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
         return;
       } else {
         item.status = "failed";
@@ -785,7 +1019,7 @@ async function processItem(params: {
     // Capture session output for this item
     try {
       const transcript = await api.runtime.subagent.getSessionMessages({
-        sessionKey,
+        sessionKey: activeSessionKey,
         limit: 200,
       });
       const msgs = (transcript.messages ?? []) as Array<{
