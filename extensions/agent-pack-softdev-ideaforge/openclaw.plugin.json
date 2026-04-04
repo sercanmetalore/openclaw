@@ -1,7 +1,7 @@
 {
   "id": "agent-pack-softdev-ideaforge",
-  "name": "Agent Pack: SoftDev & IdeaForge",
-  "description": "Installs 23 production-ready AI agents into OpenClaw: SoftDev (Engineering Manager + 12 specialist subagents) and IdeaForge (Venture Builder + 9 specialist subagents). Duplicate-safe — skips agents and files that already exist.",
+  "name": "Agent Pack: SoftDev, IdeaForge & QA",
+  "description": "Installs 49 production-ready AI agents into OpenClaw: SoftDev (Engineering Manager + 12 specialist subagents), IdeaForge (Venture Builder + 9 specialist subagents), and QA (2 supervisors + 24 specialist subagents). Duplicate-safe — skips agents and files that already exist.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

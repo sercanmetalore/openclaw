@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/agent-pack-softdev-ideaforge",
   "version": "2026.3.17",
-  "description": "Agent Pack: SoftDev & IdeaForge — installs 23 production-ready AI agents into OpenClaw",
+  "description": "Agent Pack: SoftDev, IdeaForge & QA — installs 49 production-ready AI agents into OpenClaw",
   "type": "module",
   "dependencies": {},
   "openclaw": {

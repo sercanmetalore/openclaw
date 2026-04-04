@@ -1,0 +1,19 @@
+{
+  "id": "kkkkkkk",
+  "name": "kkkkkkk",
+  "version": "1.0.0",
+  "type": "prompt",
+  "description": "kkkkkkkkkkkk",
+  "category": "code-generation",
+  "tags": [
+    "kkkkkkkkk"
+  ],
+  "entrypoint": {
+    "flowType": "Chatflow"
+  },
+  "source": {
+    "provider": "local",
+    "locator": "/home/adige/openclaw_dev/skills/kkkkkkk",
+    "verified": false
+  }
+}

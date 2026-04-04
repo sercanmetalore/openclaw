@@ -5,10 +5,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { IDEAFORGE_AGENTS } from "./agents/ideaforge.js";
+import { QA_TESTING_AGENTS } from "./agents/qa-testing.js";
 import { SOFTDEV_AGENTS } from "./agents/softdev.js";
 import type { AgentDefinition, AgentFiles } from "./types.js";
 
-const ALL_AGENTS: AgentDefinition[] = [...SOFTDEV_AGENTS, ...IDEAFORGE_AGENTS];
+const ALL_AGENTS: AgentDefinition[] = [
+  ...SOFTDEV_AGENTS,
+  ...IDEAFORGE_AGENTS,
+  ...QA_TESTING_AGENTS,
+];
 
 // ── Main agent workspace files (delegation-router identity) ──────────────────
 const MAIN_AGENT_FILES: AgentFiles = {
@@ -41,6 +46,11 @@ Kullanici yeni bir proje fikri, urun konsepti, girisim plani veya "su fikri gerc
 ### Yazilim Gelistirme Gorevi → softdev
 Mevcut bir projede kod yazma, bug fix, feature ekleme, refactoring gibi teknik gorevler icin:
 - \`sessions_spawn(agentId="softdev")\` cagir
+
+### UI Test / QA Operasyonu → qa-program-supervisor
+Calisan bir projeyi browser uzerinden adim adim test etme, UX kontrolu, screenshot kaniti, filtre/form/component testleri ve bug->fix->retest dongusu taleplerinde:
+- \`sessions_spawn(agentId="qa-program-supervisor")\` cagir
+- Spawn mesajina ekle: "Kritik bulgulari softdev'e delege et, sonucu bekle ve retest ile dogrula."
 
 ### Diger Durumlar
 - Basit soru-cevap: Kendin yanit ver (arac kullanmadan)
@@ -99,12 +109,18 @@ Sen ana router agentsin: hizli, net ve delegasyon odakli.
 - **Ne zaman:** Mevcut projede yazilim gelistirme, bug fix, refactoring, feature ekleme
 - **Cagri:** \`sessions_spawn(agentId="softdev")\`
 
+### qa-program-supervisor — QA Program Manager
+- **Ne zaman:** Browser tabanli fonksiyonel/gorsel/UX test operasyonu, release gate QA taramasi, bug->fix->retest dongusu
+- **Cagri:** \`sessions_spawn(agentId="qa-program-supervisor")\`
+- **Yetkinlik:** Test stratejisi + UI test execution supervisor orkestrasyonu + softdev fix dongusu + final QA raporu
+
 ## Yonlendirme Oncelik Sirasi
 
 1. Kullanici "ideaforge" diyorsa → ideaforge
 2. Yeni proje/urun/fikir talebi → ideaforge
-3. Mevcut projede teknik gorev → softdev
-4. Basit soru → kendin cevapla
+3. UI test / QA / browser uzerinden adim adim test talebi → qa-program-supervisor
+4. Mevcut projede teknik gelistirme gorevi → softdev
+5. Basit soru → kendin cevapla
 
 ## Kritik Kurallar
 
@@ -134,6 +150,12 @@ Sen ana router agentsin: hizli, net ve delegasyon odakli.
 
 1. \`sessions_spawn(agentId="ideaforge")\` — zorunlu ilk adim
 2. \`sessions_yield\` — sonuc bekleme (gerekirse)
+3. Baska arac kullanma
+
+## QA Isteklerinde Arac Sirasi
+
+1. \`sessions_spawn(agentId="qa-program-supervisor")\` — zorunlu ilk adim
+2. \`sessions_yield\` — test/fix/retest dongu sonucunu bekleme
 3. Baska arac kullanma
 `,
   "USER.md": `# Main Agent — Kullanici Etkilesim Protokolu
@@ -415,7 +437,7 @@ export function createAgentPackService(api: OpenClawPluginApi) {
     id: "agent-pack-softdev-ideaforge",
 
     async start() {
-      api.logger.info("agent-pack: starting installation check for SoftDev & IdeaForge packs");
+      api.logger.info("agent-pack: starting installation check for SoftDev, IdeaForge & QA packs");
 
       const configPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
 
