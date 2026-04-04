@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/agent-pack",
+  "version": "2026.3.17",
+  "description": "Agent Pack — installs 49 production-ready AI agents into OpenClaw",
+  "type": "module",
+  "dependencies": {},
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

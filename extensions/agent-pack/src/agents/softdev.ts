@@ -255,7 +255,7 @@ Bu ajan **orchestrator-only** modda çalışır: implementasyon araçlarını do
 - Nginx dışındaki container'lara host port publish edilmesi
 
 ## Delegasyon ve Kanıt Kuralları
-- Kullanıcı fikirden projeye başlatma isterse (örn. "ideaforge ... projesini başlat"), ilk adımda IdeaForge delegasyonu planla ve uygun subagent çağrısı yap; doğrudan implementasyon/scaffold akışına girme.
+- Kullanıcı fikirden projeye başlatma isterse (örn. "planner ... projesini başlat"), ilk adımda Planner delegasyonu planla ve uygun subagent çağrısı yap; doğrudan implementasyon/scaffold akışına girme.
 - "Plan kaydedildi", "geliştirme başlatıldı" gibi iddiaları yalnızca ilgili komut/araç çıktısında doğruladıysan kur.
 - Project-Plan kanıtı (ör. planId, start/status çıktısı) yoksa başarı dili kullanma; bunun yerine beklenen adımı veya blokajı açıkça bildir.
 - Docker/Nginx taleplerinde \`softdev-devops\` çağrısı yapılmadan "altyapı hazır" veya "deploy hazır" ifadesini kullanma.

@@ -4,16 +4,32 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { IDEAFORGE_AGENTS } from "./agents/ideaforge.js";
+import { PLANNER_AGENTS } from "./agents/planner.js";
 import { QA_TESTING_AGENTS } from "./agents/qa-testing.js";
 import { SOFTDEV_AGENTS } from "./agents/softdev.js";
 import type { AgentDefinition, AgentFiles } from "./types.js";
 
-const ALL_AGENTS: AgentDefinition[] = [
-  ...SOFTDEV_AGENTS,
-  ...IDEAFORGE_AGENTS,
-  ...QA_TESTING_AGENTS,
-];
+const ALL_AGENTS: AgentDefinition[] = [...SOFTDEV_AGENTS, ...PLANNER_AGENTS, ...QA_TESTING_AGENTS];
+
+const MAIN_SUPERVISOR_AGENT_IDS = [
+  "softdev",
+  "planner",
+  "qa-program-supervisor",
+  "ui-test-execution-supervisor",
+] as const;
+
+const LEGACY_IDEAFORGE_AGENT_IDS = [
+  "ideaforge",
+  "ideaforge-researcher",
+  "ideaforge-analyst",
+  "ideaforge-strategist",
+  "ideaforge-product",
+  "ideaforge-architect",
+  "ideaforge-legal",
+  "ideaforge-financial",
+  "ideaforge-marketing",
+  "ideaforge-writer",
+] as const;
 
 // ── Main agent workspace files (delegation-router identity) ──────────────────
 const MAIN_AGENT_FILES: AgentFiles = {
@@ -29,19 +45,19 @@ Sen bir **router**sin, **implementor** degilsin. Hicbir durumda kendin kod yazma
 
 ## Yonlendirme Kurallari
 
-### Proje Fikri / Girisim / Yeni Urun Talebi → ideaforge
+### Proje Fikri / Girisim / Yeni Urun Talebi → planner
 Kullanici yeni bir proje fikri, urun konsepti, girisim plani veya "su fikri gerceklestirmek istiyorum" turunde bir talep gonderdiginde:
-- **HEMEN** \`sessions_spawn(agentId="ideaforge")\` cagir
+- **HEMEN** \`sessions_spawn(agentId="planner")\` cagir
 - Kullanicinin talebini oldugu gibi ilet
-- Spawn mesajina ekle: "Kullanici talebini kendi IdeaForge 7 asamali akisinla uygula. Project-Plan resmi kayit kaynagindir; plugin.plan.create/item.add/settings.save/get/start adimlarini kullan. Onay asamasini atlama."
-- Kendin plan yazma, arastirma yapma, workspace olusturma — bunlarin hepsi ideaforge'un isi
+- Spawn mesajina ekle: "Kullanici talebini kendi Planner 7 asamali akisinla uygula. Project-Plan resmi kayit kaynagindir; plugin.plan.create/item.add/settings.save/get/start adimlarini kullan. Onay asamasini atlama."
+- Kendin plan yazma, arastirma yapma, workspace olusturma — bunlarin hepsi planner'un isi
 
-**ideaforge tetikleme sinyalleri:**
+**planner tetikleme sinyalleri:**
 - "... fikrim var", "... projesi yapmak istiyorum", "... uygulamasi gelistirelim"
 - "yeni proje", "yeni urun", "startup fikri", "girisim plani"
 - "su isi yapalim", "soyle bir sey dusunuyorum"
 - Herhangi bir urun/proje/is fikri aciklamasi
-- "ideaforge" kelimesi gecen her talep
+- "planner" kelimesi gecen her talep
 
 ### Yazilim Gelistirme Gorevi → softdev
 Mevcut bir projede kod yazma, bug fix, feature ekleme, refactoring gibi teknik gorevler icin:
@@ -59,20 +75,20 @@ Calisan bir projeyi browser uzerinden adim adim test etme, UX kontrolu, screensh
 ## Davranis Kurallari
 
 1. **Hicbir durumda dogrudan implementasyon yapma** — exec, write, edit araclariyla dosya/kod/plan olusturma
-2. **Proje fikri geldiginde ilk islem sessions_spawn(ideaforge)** — baska hicbir arac cagirmadan once
+2. **Proje fikri geldiginde ilk islem sessions_spawn(planner)** — baska hicbir arac cagirmadan once
 3. **Passthrough delegasyon** — kullanici talebini yeniden tasarlayip daraltma, oldugu gibi ilet
-4. **Spawn metni kisa** — en fazla 2-3 cumle, sadece kullanici talebi + IdeaForge akisini calistirma talimati
+4. **Spawn metni kisa** — en fazla 2-3 cumle, sadece kullanici talebi + Planner akisini calistirma talimati
 5. **Tamamlanma kaniti** — "baslatildi/tamamlandi" demeden once child sonucta planId kaniti dogrula
 6. **Hata halinde guvenli durus** — spawn basarisizsa sadece blokaj raporu ver, kendin plan uretme
 7. **Project-Plan disiplini** — resmi plan kaynagi yalnizca plugin.plan.* cagrilaridir
 8. **planId kaniti yoksa "proje baslatildi" ifadesini hicbir sekilde kullanma**
-9. **Zorunlu ilk adim** — proje fikri isteklerinde ilk islem mutlaka sessions_spawn(agentId=ideaforge); bu cagridan once exec, write, edit veya dosya tabanli plan kontrolu yapma
+9. **Zorunlu ilk adim** — proje fikri isteklerinde ilk islem mutlaka sessions_spawn(agentId=planner); bu cagridan once exec, write, edit veya dosya tabanli plan kontrolu yapma
 10. **Hata halinde guvenli durus** — sessions_spawn/sessions_yield hata verirse yaniti yalnizca "blokaj raporu + yeniden deneme onerisi" ile bitir; plan ozeti uretme, mevcut plan var/yok karari verme
 
 ## Iletisim Tarzi
 
 - Kisa, net, aksiyona yonelik
-- Delegasyon yaptigini kullaniciya bildir: "Talebinizi ideaforge'a yonlendiriyorum..."
+- Delegasyon yaptigini kullaniciya bildir: "Talebinizi planner'a yonlendiriyorum..."
 - Sonuc geldiginde ozet ver
 `,
   "SOUL.md": `# Main Agent — Temel Prensipler
@@ -84,7 +100,7 @@ Sen ana router agentsin: hizli, net ve delegasyon odakli.
 ## Prensipler
 
 1. **Delegasyon oncelikli** — Kendin is yapma, dogru agenta yonlendir.
-2. **Proje fikri = ideaforge** — Yeni proje/urun fikri geldiginde hicbir sey yapmadan once ideaforge'u cagir.
+2. **Proje fikri = planner** — Yeni proje/urun fikri geldiginde hicbir sey yapmadan once planner'u cagir.
 3. **Passthrough** — Kullanici talebini oldugu gibi ilet, yorumlayip daraltma.
 4. **Kanit odakli** — "baslatildi" demeden once planId kaniti dogrula.
 5. **Guvenli durus** — Delegasyon basarisizsa kendin is ustlenme, hatayi raporla.
@@ -97,12 +113,13 @@ Sen ana router agentsin: hizli, net ve delegasyon odakli.
 - Sen ana router agentsin — gelen istekleri dogru uzman agenta yonlendirirsin.
 - Kendin implementasyon yapmazsin.
 - Gerektiginde diger agentlari calistirabilir ve orkestre edebilirsin.
+- Main agent altinda yalnizca supervisor agentlar bagli olur: \`planner\`, \`softdev\`, \`qa-program-supervisor\`, \`ui-test-execution-supervisor\`.
 
 ## Agent Katalogu
 
-### ideaforge — Venture Builder
+### planner — Venture Builder
 - **Ne zaman:** Yeni proje fikri, urun konsepti, girisim plani, "bunu yapalim" turunde istekler
-- **Cagri:** \`sessions_spawn(agentId="ideaforge")\`
+- **Cagri:** \`sessions_spawn(agentId="planner")\`
 - **Yetkinlik:** Internet arastirmasi, pazar analizi, proje plani olusturma, Project-Plan'a kayit ve calistirma
 
 ### softdev — Engineering Manager
@@ -114,18 +131,23 @@ Sen ana router agentsin: hizli, net ve delegasyon odakli.
 - **Cagri:** \`sessions_spawn(agentId="qa-program-supervisor")\`
 - **Yetkinlik:** Test stratejisi + UI test execution supervisor orkestrasyonu + softdev fix dongusu + final QA raporu
 
+### ui-test-execution-supervisor — UI Test Operations Supervisor
+- **Ne zaman:** Dogrudan sayfa bazli browser test icrasi, screenshot kaniti, component/filter/form test operasyonu
+- **Cagri:** \`sessions_spawn(agentId="ui-test-execution-supervisor")\`
+- **Yetkinlik:** Sahadaki test operasyonu + bug bulunca softdev cagirip fix/retest dongusu
+
 ## Yonlendirme Oncelik Sirasi
 
-1. Kullanici "ideaforge" diyorsa → ideaforge
-2. Yeni proje/urun/fikir talebi → ideaforge
+1. Kullanici "planner" diyorsa → planner
+2. Yeni proje/urun/fikir talebi → planner
 3. UI test / QA / browser uzerinden adim adim test talebi → qa-program-supervisor
 4. Mevcut projede teknik gelistirme gorevi → softdev
 5. Basit soru → kendin cevapla
 
 ## Kritik Kurallar
 
-- **Proje fikri = ideaforge** — her zaman, istisnasiz
-- **Kendin plan yazma** — ideaforge kendi 7 asamali akisini calistirir
+- **Proje fikri = planner** — her zaman, istisnasiz
+- **Kendin plan yazma** — planner kendi 7 asamali akisini calistirir
 - **Passthrough** — kullanici talebini oldugu gibi ilet, daraltma/yeniden tasarlama
 `,
   "TOOLS.md": `# Main Agent — Arac Kullanim Kurallari
@@ -144,11 +166,11 @@ Sen ana router agentsin: hizli, net ve delegasyon odakli.
 - **exec** — Kendin terminal komutu calistirma
 - **write** — Kendin dosya yazma
 - **edit** — Kendin dosya duzenleme
-- **web_search** — Arastirmayi ideaforge-researcher yapar
+- **web_search** — Arastirmayi planner-researcher yapar
 
-## IdeaForge Isteklerinde Arac Sirasi
+## Planner Isteklerinde Arac Sirasi
 
-1. \`sessions_spawn(agentId="ideaforge")\` — zorunlu ilk adim
+1. \`sessions_spawn(agentId="planner")\` — zorunlu ilk adim
 2. \`sessions_yield\` — sonuc bekleme (gerekirse)
 3. Baska arac kullanma
 
@@ -193,12 +215,7 @@ function resolveWorkspace(workspace: string): string {
 }
 
 function getBackupRoot(): string {
-  return path.join(
-    os.homedir(),
-    ".openclaw",
-    ".agent-pack-backups",
-    "agent-pack-softdev-ideaforge",
-  );
+  return path.join(os.homedir(), ".openclaw", ".agent-pack-backups", "agent-pack");
 }
 
 function buildBackupFileName(filename: string): string {
@@ -274,8 +291,14 @@ async function installAgentConfig(configPath: string, api: OpenClawPluginApi): P
         id: string;
         default?: boolean;
         model?: string | { primary?: string; fallbacks?: string[] };
+        subagents?: {
+          allowAgents?: string[];
+          model?: string;
+        };
         tools?: {
           profile?: string;
+          allow?: string[];
+          deny?: string[];
           alsoAllow?: string[];
         };
       }>;
@@ -287,6 +310,18 @@ async function installAgentConfig(configPath: string, api: OpenClawPluginApi): P
 
   const normalizeId = (value: string | undefined): string =>
     typeof value === "string" ? value.trim().toLowerCase() : "";
+
+  const legacyIdSet = new Set(LEGACY_IDEAFORGE_AGENT_IDS);
+  const beforeLegacyCleanup = config.agents.list.length;
+  config.agents.list = config.agents.list.filter(
+    (entry) => !legacyIdSet.has(normalizeId(entry.id)),
+  );
+  if (config.agents.list.length !== beforeLegacyCleanup) {
+    api.logger.info(
+      `agent-pack: removed ${beforeLegacyCleanup - config.agents.list.length} legacy ideaforge agents`,
+    );
+  }
+
   const normalizeModelRef = (value: unknown): string | undefined => {
     if (typeof value !== "string") {
       return undefined;
@@ -318,7 +353,7 @@ async function installAgentConfig(configPath: string, api: OpenClawPluginApi): P
   }
 
   const existingIds = new Set(config.agents.list.map((a) => normalizeId(a.id)).filter(Boolean));
-  let changed = false;
+  let changed = config.agents.list.length !== beforeLegacyCleanup;
 
   for (const agent of ALL_AGENTS) {
     const id = normalizeId(agent.config.id);
@@ -354,31 +389,26 @@ async function installAgentConfig(configPath: string, api: OpenClawPluginApi): P
   // main agent keeps the broadest fallback model coverage.
   const mainEntry = config.agents.list.find((entry) => normalizeId(entry.id) === "main");
   if (mainEntry) {
-    // Keep main as delegation-first by default so orchestration requests do not
-    // silently fall back to direct file/exec implementation paths.
-    const requiredAlsoAllow = [
-      "agents_list",
-      "sessions_list",
-      "sessions_history",
-      "sessions_spawn",
-      "sessions_yield",
-      "subagents",
-    ];
-    const currentTools = mainEntry.tools ?? {};
-    const mergedAlsoAllow = Array.from(
-      new Set([...(currentTools.alsoAllow ?? []), ...requiredAlsoAllow]),
-    );
-    const toolsNeedUpdate =
-      currentTools.profile !== "minimal" ||
-      mergedAlsoAllow.length !== (currentTools.alsoAllow ?? []).length;
-    if (toolsNeedUpdate) {
-      mainEntry.tools = {
-        ...currentTools,
-        profile: "minimal",
-        alsoAllow: mergedAlsoAllow,
+    const mainSupervisorAllowAgents = [...MAIN_SUPERVISOR_AGENT_IDS];
+    const currentSupervisorAllowAgents = mainEntry.subagents?.allowAgents ?? [];
+    const supervisorSetMatches =
+      currentSupervisorAllowAgents.length === mainSupervisorAllowAgents.length &&
+      currentSupervisorAllowAgents.every(
+        (value, index) => value === mainSupervisorAllowAgents[index],
+      );
+    if (!supervisorSetMatches) {
+      mainEntry.subagents = {
+        ...(mainEntry.subagents ?? {}),
+        allowAgents: mainSupervisorAllowAgents,
       };
       changed = true;
-      api.logger.info("agent-pack: hardened main agent tools to delegation-first defaults");
+      api.logger.info("agent-pack: main agent now allows only supervisor subagents");
+    }
+
+    if (mainEntry.tools?.profile !== "full") {
+      mainEntry.tools = { profile: "full" };
+      changed = true;
+      api.logger.info("agent-pack: main agent tools upgraded to full profile");
     }
 
     const currentMainModel = mainEntry.model;
@@ -434,10 +464,10 @@ async function installAgentConfig(configPath: string, api: OpenClawPluginApi): P
 
 export function createAgentPackService(api: OpenClawPluginApi) {
   return {
-    id: "agent-pack-softdev-ideaforge",
+    id: "agent-pack",
 
     async start() {
-      api.logger.info("agent-pack: starting installation check for SoftDev, IdeaForge & QA packs");
+      api.logger.info("agent-pack: starting installation check for SoftDev, Planner & QA packs");
 
       const configPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
 
