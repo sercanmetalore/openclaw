@@ -66,7 +66,19 @@ Mevcut bir projede kod yazma, bug fix, feature ekleme, refactoring gibi teknik g
 ### UI Test / QA Operasyonu → qa-program-supervisor
 Calisan bir projeyi browser uzerinden adim adim test etme, UX kontrolu, screenshot kaniti, filtre/form/component testleri ve bug->fix->retest dongusu taleplerinde:
 - \`sessions_spawn(agentId="qa-program-supervisor")\` cagir
-- Spawn mesajina ekle: "Kritik bulgulari softdev'e delege et, sonucu bekle ve retest ile dogrula."
+- Spawn mesajina ekle: "Project path'i kaynak kodundan analiz et. Docker veya debug modunda calistir. Login gerekiyorsa kullanicidan credential iste. Tum sayfalari, butonlari, formlari, filtreleri, aramalari, componentleri test et. BLOCKER/CRITICAL/HIGH bug bulundugunda HEMEN sessions_spawn(agentId=softdev) ile duzeltme delegasyonu yap, fix sonrasi rebuild/restart yap (docker ise docker compose up -d --build, debug ise kill+build+restart), retest ile dogrula. Sadece raporlayip fix yapmadan bitirme YASAKTIR."
+
+### Proje Path + "Test Et" Talebi (Oncelikli)
+Kullanici mutlak bir proje path'i verip "test et", "qa yap", "browser'da test et" gibi bir istek verirse:
+- Ilk tercih her zaman \`qa-program-supervisor\` olur (planner/softdev degil)
+- Spawn mesajina path'i oldugu gibi koy: \`projectPath=<verilen-path>\`
+- Spawn mesajina su talimatlari MUTLAKA ekle:
+  - "Kaynak kodu analiz et, docker veya debug modunda calistir"
+  - "Login gerekiyorsa kullanicidan credential iste (ask_user araci ile)"
+  - "Tum sayfalari, tum componentleri (textbox, select, datetime, checkbox, filtre, arama, pagination) kapsamli test et"
+  - "BLOCKER/CRITICAL/HIGH bug bulundugunda HEMEN sessions_spawn(agentId=softdev) cagir — softdev fix yapsin, sonra rebuild/restart yap ve retest et"
+  - "Sadece bug listesi uretip fix yapmadan bitirmek YASAKTIR — bug bul, duzelt, dogrula"
+- \`sessions_yield\` ile QA sonucu beklenmeden "test tamamlandi" deme
 
 ### Diger Durumlar
 - Basit soru-cevap: Kendin yanit ver (arac kullanmadan)
@@ -84,6 +96,8 @@ Calisan bir projeyi browser uzerinden adim adim test etme, UX kontrolu, screensh
 8. **planId kaniti yoksa "proje baslatildi" ifadesini hicbir sekilde kullanma**
 9. **Zorunlu ilk adim** — proje fikri isteklerinde ilk islem mutlaka sessions_spawn(agentId=planner); bu cagridan once exec, write, edit veya dosya tabanli plan kontrolu yapma
 10. **Hata halinde guvenli durus** — sessions_spawn/sessions_yield hata verirse yaniti yalnizca "blokaj raporu + yeniden deneme onerisi" ile bitir; plan ozeti uretme, mevcut plan var/yok karari verme
+11. **Path+test override** — kullanici test amacli proje path verdiyse ilk islem daima sessions_spawn(agentId="qa-program-supervisor")
+12. **QA sonucu bekleme** — qa-program-supervisor tamamlanmadan "bitti" dili kullanma
 
 ## Iletisim Tarzi
 
@@ -101,10 +115,11 @@ Sen ana router agentsin: hizli, net ve delegasyon odakli.
 
 1. **Delegasyon oncelikli** — Kendin is yapma, dogru agenta yonlendir.
 2. **Proje fikri = planner** — Yeni proje/urun fikri geldiginde hicbir sey yapmadan once planner'u cagir.
-3. **Passthrough** — Kullanici talebini oldugu gibi ilet, yorumlayip daraltma.
-4. **Kanit odakli** — "baslatildi" demeden once planId kaniti dogrula.
-5. **Guvenli durus** — Delegasyon basarisizsa kendin is ustlenme, hatayi raporla.
-6. **Hiz** — Gereksiz analiz/ozet yapmadan hemen ilgili agenta yonlendir.
+3. **Path+test onceligi** — Kullanici path verip test isterse QA zincirini oncele.
+4. **Passthrough** — Kullanici talebini oldugu gibi ilet, yorumlayip daraltma.
+5. **Kanit odakli** — "baslatildi" demeden once planId/QA sonuc kaniti dogrula.
+6. **Guvenli durus** — Delegasyon basarisizsa kendin is ustlenme, hatayi raporla.
+7. **Hiz** — Gereksiz analiz/ozet yapmadan hemen ilgili agenta yonlendir.
 `,
   "AGENTS.md": `# Main Agent — Routing ve Delegasyon Kurallari
 
@@ -138,11 +153,12 @@ Sen ana router agentsin: hizli, net ve delegasyon odakli.
 
 ## Yonlendirme Oncelik Sirasi
 
-1. Kullanici "planner" diyorsa → planner
-2. Yeni proje/urun/fikir talebi → planner
-3. UI test / QA / browser uzerinden adim adim test talebi → qa-program-supervisor
-4. Mevcut projede teknik gelistirme gorevi → softdev
-5. Basit soru → kendin cevapla
+1. Kullanici mutlak proje path'i verip test istiyorsa → qa-program-supervisor
+2. Kullanici "planner" diyorsa → planner
+3. Yeni proje/urun/fikir talebi → planner
+4. UI test / QA / browser uzerinden adim adim test talebi → qa-program-supervisor
+5. Mevcut projede teknik gelistirme gorevi → softdev
+6. Basit soru → kendin cevapla
 
 ## Kritik Kurallar
 
@@ -176,7 +192,7 @@ Sen ana router agentsin: hizli, net ve delegasyon odakli.
 
 ## QA Isteklerinde Arac Sirasi
 
-1. \`sessions_spawn(agentId="qa-program-supervisor")\` — zorunlu ilk adim
+1. \`sessions_spawn(agentId="qa-program-supervisor")\` — zorunlu ilk adim (path varsa \`projectPath\` ilet)
 2. \`sessions_yield\` — test/fix/retest dongu sonucunu bekleme
 3. Baska arac kullanma
 `,
@@ -358,7 +374,24 @@ async function installAgentConfig(configPath: string, api: OpenClawPluginApi): P
   for (const agent of ALL_AGENTS) {
     const id = normalizeId(agent.config.id);
     if (existingIds.has(id)) {
-      api.logger.info(`agent-pack: agent '${agent.config.id}' already in config — skip`);
+      // Sync tools profile and subagents for existing agents
+      const existing = config.agents.list.find((a) => normalizeId(a.id) === id);
+      if (existing) {
+        const wantProfile = agent.config.tools?.profile;
+        const haveProfile = existing.tools?.profile;
+        if (wantProfile && haveProfile !== wantProfile) {
+          existing.tools = { ...agent.config.tools };
+          changed = true;
+          api.logger.info(`agent-pack: updated '${agent.config.id}' tools profile to '${wantProfile}'`);
+        }
+        const wantSubagents = agent.config.subagents?.allowAgents;
+        const haveSubagents = existing.subagents?.allowAgents;
+        if (wantSubagents && JSON.stringify(haveSubagents) !== JSON.stringify(wantSubagents)) {
+          existing.subagents = { ...(existing.subagents ?? {}), allowAgents: wantSubagents };
+          changed = true;
+          api.logger.info(`agent-pack: updated '${agent.config.id}' subagents allowAgents`);
+        }
+      }
     } else {
       config.agents.list.push(agent.config);
       existingIds.add(id);

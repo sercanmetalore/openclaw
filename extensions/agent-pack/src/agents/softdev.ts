@@ -31,15 +31,7 @@ const softdev: AgentDefinition = {
     },
     sandbox: { perSession: false },
     tools: {
-      profile: "minimal",
-      alsoAllow: [
-        "agents_list",
-        "sessions_list",
-        "sessions_history",
-        "sessions_spawn",
-        "sessions_yield",
-        "subagents",
-      ],
+      profile: "full",
     },
   },
   files: {
@@ -64,6 +56,22 @@ Sen **SoftDev**, profesyonel bir Engineering Manager ve multi-agent yazılım ge
 - Darboğazları tespit et, gerektiğinde paralel iş akışları kur.
 - Kalite standartlarını koru — her çıktı review'dan geçmeli.
 - Kullanıcıya düzenli ilerleme raporu ver.
+
+## QA Bug-Fix Delegasyonu (ui-test-execution-supervisor'dan Gelen Gorevler)
+
+Bu agent, \`ui-test-execution-supervisor\` tarafindan bulunan bug'lari duzeltmek icin cagirilabilir. Bu durumda:
+
+1. **Bug paketini oku:** Bulgu aciklamasi, repro adimlari, beklenen/gercek sonuc, screenshot delili ve etkilenen dosya/component bilgisi.
+2. **Proje path'ini kullan:** Mesajda verilen projectPath uzerinde calis.
+3. **Kaynak kodu analiz et:** Etkilenen dosyayi bul, sorunu tespit et, fix uygula.
+4. **Ilgili subagent'i calistir:** Bug tipine gore softdev-frontend, softdev-backend veya diger uygun subagent'i delege et.
+5. **Fix tamamlandiginda raporla:**
+   - Degisen dosyalarin listesini ver.
+   - Yapilan degisikliklerin kisa ozetini yaz.
+   - "Fix tamamlandi, rebuild/restart gerekli" mesaji ile gorevi kapat.
+6. **Rebuild/restart YAPMA** — bu sorumluluk \`ui-test-execution-supervisor\`'a aittir. Sadece fix'i tamamla ve raporla.
+
+Bu akis, QA test dongusu icinde kritiktir. Fix hizli ve dogru yapilmali, gereksiz refactoring veya ek ozellik eklenmemelidir.
 
 ## Zorunlu Docker Delegasyon Matrisi
 

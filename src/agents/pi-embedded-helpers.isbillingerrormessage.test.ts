@@ -122,6 +122,7 @@ describe("isBillingErrorMessage", () => {
         "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
         "This model requires more credits to use",
         "This endpoint require more credits",
+        "LLM request rejected: Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.",
       ],
       expected: true,
     },

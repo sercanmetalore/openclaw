@@ -404,6 +404,29 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back when Anthropic extra-usage rejection arrives as AbortError", async () => {
+    const cfg = makeCfg();
+    const firstError = Object.assign(
+      new Error(
+        "LLM request rejected: Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.",
+      ),
+      { name: "AbortError" },
+    );
+    const run = vi.fn().mockRejectedValueOnce(firstError).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
+    expect(run.mock.calls[1]?.[0]).not.toBe("anthropic");
+  });
+
   it("records 400 insufficient_quota payloads as billing during fallback", async () => {
     const cfg = makeCfg();
     const run = vi
