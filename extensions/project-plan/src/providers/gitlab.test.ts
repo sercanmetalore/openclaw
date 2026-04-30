@@ -25,13 +25,14 @@ describe("project-plan GitLab provider ordering", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    const items = await fetchGitLabItems({
+    const result = await fetchGitLabItems({
       token: "gl-token",
       settings: { project: "openclaw/openclaw" },
       planSettings: { source: "gitlab", syncMode: "manual" },
     });
 
-    expect(items).toHaveLength(1);
+    expect(result.items).toHaveLength(1);
+    expect(result.partial).toBeFalsy();
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("order_by=created_at");
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("sort=asc");
   });

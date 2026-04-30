@@ -42,13 +42,14 @@ describe("project-plan Azure provider ordering", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    const items = await fetchAzureItems({
+    const result = await fetchAzureItems({
       token: "az-token",
       settings: { organization: "openclaw", project: "openclaw" },
       planSettings: { source: "azuredevops", syncMode: "manual" },
     });
 
-    expect(items.map((item) => item.title)).toEqual(["First item", "Second item"]);
-    expect(items.map((item) => item.order)).toEqual([0, 1]);
+    expect(result.items.map((item) => item.title)).toEqual(["First item", "Second item"]);
+    expect(result.items.map((item) => item.order)).toEqual([0, 1]);
+    expect(result.partial).toBeFalsy();
   });
 });

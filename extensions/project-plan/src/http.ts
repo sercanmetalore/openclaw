@@ -5,9 +5,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { recordAuditEvent } from "./audit.js";
 import { recomputeContainerStatuses } from "./execution.js";
+import { guardBrowsePath } from "./fs-browse-guard.js";
 import { convertFileToItems } from "./llm-convert.js";
 import { syncFromProvider } from "./providers/index.js";
+import {
+  verifyAzureWebhook,
+  verifyGitHubWebhook,
+  verifyGitLabWebhook,
+  verifyJiraWebhook,
+  type VerifyWebhookResult,
+} from "./webhooks.js";
 import { askPlanQuestion, isRunning, requestStop, startPlanExecution } from "./service.js";
 import {
   buildCounts,
@@ -59,6 +68,23 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
     });
     req.on("error", reject);
   });
+}
+
+async function readRawBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk: Buffer) => {
+      data += chunk.toString();
+    });
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+}
+
+function firstHeader(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name.toLowerCase()];
+  if (Array.isArray(value)) return value[0];
+  return typeof value === "string" ? value : undefined;
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -240,6 +266,104 @@ export function createHttpHandler(params: {
         return (ok(res, { ok: true, plan: { id: plan.id } }), true);
       }
 
+      // ── POST /api/webhooks/:provider/:planId ─────────────────────────────
+      // Provider-triggered re-sync. Signature-verified against plugin config
+      // webhookSecrets. Plugin auth still wraps this route — deploy behind a
+      // reverse proxy that strips auth for /plugins/project-plan/api/webhooks/*
+      // if external providers need to post directly.
+      const webhookMatch = apiPath.match(/^\/webhooks\/([^/]+)\/([^/]+)$/);
+      if (method === "POST" && webhookMatch) {
+        const provider = webhookMatch[1] as ProjectPlanIntegrationId;
+        const webhookPlanId = webhookMatch[2];
+        const rawBody = await readRawBody(req);
+        const secrets = pluginConfig.webhookSecrets ?? {};
+
+        let verification: VerifyWebhookResult;
+        if (provider === "github") {
+          verification = verifyGitHubWebhook({
+            rawBody,
+            signatureHeader: firstHeader(req, "X-Hub-Signature-256"),
+            secret: secrets.github,
+          });
+        } else if (provider === "gitlab") {
+          verification = verifyGitLabWebhook({
+            tokenHeader: firstHeader(req, "X-Gitlab-Token"),
+            secret: secrets.gitlab,
+          });
+        } else if (provider === "jira") {
+          verification = verifyJiraWebhook({
+            identifierHeader: firstHeader(req, "X-Atlassian-Webhook-Identifier"),
+            sharedSecretHeader: firstHeader(req, "X-OpenClaw-Webhook-Secret"),
+            secret: secrets.jira,
+          });
+        } else if (provider === "azuredevops") {
+          verification = verifyAzureWebhook({
+            basicAuthHeader: firstHeader(req, "authorization"),
+            expectedUser: secrets.azureUser,
+            expectedPassword: secrets.azurePassword,
+          });
+        } else {
+          return (err(res, 404, `Unsupported webhook provider: ${provider}`), true);
+        }
+
+        if (!verification.ok) {
+          return (err(res, verification.status, verification.reason), true);
+        }
+
+        const plan = await loadPlan(stateDir, webhookPlanId);
+        if (!plan) return (err(res, 404, "Plan not found"), true);
+        if (plan.settings.source !== provider) {
+          return (err(res, 400, `Plan source does not match webhook provider: ${provider}`), true);
+        }
+
+        let token: string | undefined;
+        let settings: Omit<ProjectPlanIntegrationSettings, "token"> = {};
+        if (plan.settings.accountId) {
+          token = (await resolveAccountToken(stateDir, plan.settings.accountId)) ?? undefined;
+          const accounts = await loadAccounts(stateDir);
+          const acc = accounts.find((a) => a.id === plan.settings.accountId);
+          if (acc) settings = acc.settings;
+        }
+        if (!token) {
+          return (err(res, 400, `No account/token configured for ${provider}`), true);
+        }
+
+        const { items, added, updated, partial, errors } = await syncFromProvider({
+          source: provider,
+          token,
+          settings,
+          planSettings: plan.settings,
+          existingItems: plan.items,
+          pluginConfig,
+        });
+        plan.items = items;
+        recomputeContainerStatuses(plan);
+        plan.logs.push(
+          createLog({
+            level: partial ? "warn" : "info",
+            message: `Webhook sync: ${added} added, ${updated} updated${partial ? " (partial)" : ""}`,
+          }),
+        );
+        await savePlan(stateDir, plan, opts);
+        await recordAuditEvent({
+          stateDir,
+          event: {
+            type: "provider.sync",
+            planId: webhookPlanId,
+            source: provider,
+            direction: "pull",
+            added,
+            updated,
+            partial: partial === true,
+            errorCount: errors?.length ?? 0,
+          },
+        });
+        return (
+          ok(res, { ok: true, added, updated, partial: partial === true }),
+          true
+        );
+      }
+
       // ── Plan routes ──────────────────────────────────────────────────────
       const planMatch = apiPath.match(/^\/plans\/([^/]+)(\/.*)?$/);
       if (planMatch) {
@@ -356,20 +480,46 @@ export function createHttpHandler(params: {
             return (err(res, 400, `No account/token configured for ${source}`), true);
           }
 
-          const { items, added, updated } = await syncFromProvider({
+          const { items, added, updated, partial, errors } = await syncFromProvider({
             source: source as ProjectPlanIntegrationId,
             token,
             settings,
             planSettings: plan.settings,
             existingItems: plan.items,
+            pluginConfig,
           });
           plan.items = items;
           recomputeContainerStatuses(plan);
-          plan.logs.push(
-            createLog({ level: "info", message: `Sync: ${added} added, ${updated} updated.` }),
-          );
+          if (partial && errors?.length) {
+            plan.logs.push(
+              createLog({
+                level: "warn",
+                message: `Partial sync (${added} added, ${updated} updated): ${errors.slice(0, 3).join("; ")}`,
+              }),
+            );
+          } else {
+            plan.logs.push(
+              createLog({ level: "info", message: `Sync: ${added} added, ${updated} updated.` }),
+            );
+          }
           await savePlan(stateDir, plan, opts);
-          return (ok(res, { ok: true, added, updated }), true);
+          await recordAuditEvent({
+            stateDir,
+            event: {
+              type: "provider.sync",
+              planId,
+              source: source as ProjectPlanIntegrationId,
+              direction: "pull",
+              added,
+              updated,
+              partial: partial === true,
+              errorCount: errors?.length ?? 0,
+            },
+          });
+          return (
+            ok(res, { ok: true, added, updated, partial: partial === true, errors }),
+            true
+          );
         }
 
         // POST /api/plans/:id/upload
@@ -613,7 +763,14 @@ export function createHttpHandler(params: {
       if (method === "GET" && apiPath === "/fs/browse") {
         const qs = new URLSearchParams(url.includes("?") ? url.slice(url.indexOf("?") + 1) : "");
         const requestedPath = qs.get("path") ?? "";
-        const resolved = requestedPath ? path.resolve(requestedPath) : os.homedir();
+        const decision = guardBrowsePath(requestedPath, os.homedir(), {
+          allowedRoots: pluginConfig.fsBrowseAllowedRoots,
+        });
+        if (!decision.ok) {
+          err(res, decision.status, decision.reason);
+          return true;
+        }
+        const resolved = decision.resolved;
         let entries: Array<{ name: string; isDir: boolean }> = [];
         try {
           const dirents = await fs.readdir(resolved, { withFileTypes: true });

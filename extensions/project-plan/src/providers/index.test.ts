@@ -10,20 +10,22 @@ vi.mock("./github.js", () => ({
 describe("project-plan provider sync ordering", () => {
   it("updates existing item order from provider data during sync", async () => {
     const github = await import("./github.js");
-    vi.mocked(github.fetchGitHubItems).mockResolvedValueOnce([
-      createItem({
-        title: "Older issue",
-        type: "task",
-        externalId: "1",
-        order: 0,
-      }),
-      createItem({
-        title: "Newer issue",
-        type: "task",
-        externalId: "2",
-        order: 1,
-      }),
-    ]);
+    vi.mocked(github.fetchGitHubItems).mockResolvedValueOnce({
+      items: [
+        createItem({
+          title: "Older issue",
+          type: "task",
+          externalId: "1",
+          order: 0,
+        }),
+        createItem({
+          title: "Newer issue",
+          type: "task",
+          externalId: "2",
+          order: 1,
+        }),
+      ],
+    });
 
     const existingItems = [
       createItem({

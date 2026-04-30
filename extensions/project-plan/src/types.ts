@@ -187,6 +187,33 @@ export type FsBrowseResult = {
 export type ProjectPlanPluginConfig = {
   maxLogEntries?: number;
   itemTimeoutMinutes?: number;
+  /** "off" (default) preserves titles; "mask" strips PII and truncates for plan.logs. */
+  logSanitizeMode?: "off" | "mask";
+  /** Max chars kept when logSanitizeMode is "mask". */
+  logSanitizeMaxTitleChars?: number;
+  /** Max retry attempts for transient overload errors per item (default: 2). */
+  overloadMaxRetries?: number;
+  /** Base delay in ms for exponential backoff between overload retries (default: 2000). */
+  overloadRetryBaseDelayMs?: number;
+  /** Upper bound for transient-capacity wait time in ms (default: 120000). */
+  transientCapacityMaxDelayMs?: number;
+  /** Provider base URL overrides. Falls back to built-in defaults when omitted. */
+  providerBaseUrls?: {
+    github?: string;
+    gitlab?: string;
+    jira?: string;
+    azure?: string;
+  };
+  /** Absolute roots that /api/fs/browse is allowed to surface. Empty = unrestricted (legacy). */
+  fsBrowseAllowedRoots?: string[];
+  /** Shared secrets for inbound provider webhooks. When unset, webhooks for that provider are rejected. */
+  webhookSecrets?: {
+    github?: string;
+    gitlab?: string;
+    jira?: string;
+    azureUser?: string;
+    azurePassword?: string;
+  };
 };
 
 /** Convenience: all statuses as an array for building counts records. */

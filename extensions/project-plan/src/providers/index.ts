@@ -4,13 +4,14 @@ import type {
   ProjectPlanIntegrationId,
   ProjectPlanIntegrationSettings,
   ProjectPlanItem,
+  ProjectPlanPluginConfig,
   ProjectPlanSettings,
   ProjectPlanStatus,
 } from "../types.js";
 import { fetchAzureItems, pushAzureItems } from "./azure.js";
 import { fetchGitHubItems, pushGitHubItems } from "./github.js";
 import { fetchGitLabItems, pushGitLabItems } from "./gitlab.js";
-import { fetchJiraItems } from "./jira.js";
+import { fetchJiraItems, pushJiraItems } from "./jira.js";
 
 export type SyncResult = {
   added: number;
@@ -32,18 +33,33 @@ export async function syncFromProvider(params: {
   settings: Omit<ProjectPlanIntegrationSettings, "token">;
   planSettings: ProjectPlanSettings;
   existingItems: ProjectPlanItem[];
-}): Promise<SyncResult> {
-  const { source, token, settings, planSettings, existingItems } = params;
+  pluginConfig?: ProjectPlanPluginConfig;
+}): Promise<SyncResult & { partial?: boolean; errors?: string[] }> {
+  const { source, token, settings, planSettings, existingItems, pluginConfig } = params;
 
   let fetched: ProjectPlanItem[];
+  let partial = false;
+  const errors: string[] = [];
   if (source === "github") {
-    fetched = await fetchGitHubItems({ token, settings, planSettings });
+    const res = await fetchGitHubItems({ token, settings, planSettings, pluginConfig });
+    fetched = res.items;
+    partial = res.partial ?? false;
+    if (res.errors?.length) errors.push(...res.errors);
   } else if (source === "gitlab") {
-    fetched = await fetchGitLabItems({ token, settings, planSettings });
+    const res = await fetchGitLabItems({ token, settings, planSettings, pluginConfig });
+    fetched = res.items;
+    partial = res.partial ?? false;
+    if (res.errors?.length) errors.push(...res.errors);
   } else if (source === "jira") {
-    fetched = await fetchJiraItems({ token, settings, planSettings });
+    const res = await fetchJiraItems({ token, settings, planSettings, pluginConfig });
+    fetched = res.items;
+    partial = res.partial ?? false;
+    if (res.errors?.length) errors.push(...res.errors);
   } else if (source === "azuredevops") {
-    fetched = await fetchAzureItems({ token, settings, planSettings });
+    const res = await fetchAzureItems({ token, settings, planSettings, pluginConfig });
+    fetched = res.items;
+    partial = res.partial ?? false;
+    if (res.errors?.length) errors.push(...res.errors);
   } else {
     return { added: 0, updated: 0, items: existingItems };
   }
@@ -79,7 +95,7 @@ export async function syncFromProvider(params: {
     }
   }
 
-  return { added, updated, items: merged };
+  return { added, updated, items: merged, partial, errors: errors.length ? errors : undefined };
 }
 
 /**
@@ -91,14 +107,16 @@ export async function syncToProvider(params: {
   settings: Omit<ProjectPlanIntegrationSettings, "token">;
   planSettings: ProjectPlanSettings;
   items: ProjectPlanItem[];
+  pluginConfig?: ProjectPlanPluginConfig;
 }): Promise<void> {
-  const { source, token, settings, planSettings, items } = params;
+  const { source, token, settings, planSettings, items, pluginConfig } = params;
   if (source === "github") {
-    await pushGitHubItems({ token, settings, planSettings, items });
+    await pushGitHubItems({ token, settings, planSettings, items, pluginConfig });
   } else if (source === "gitlab") {
-    await pushGitLabItems({ token, settings, planSettings, items });
+    await pushGitLabItems({ token, settings, planSettings, items, pluginConfig });
   } else if (source === "azuredevops") {
-    await pushAzureItems({ token, settings, planSettings, items });
+    await pushAzureItems({ token, settings, planSettings, items, pluginConfig });
+  } else if (source === "jira") {
+    await pushJiraItems({ token, settings, planSettings, items, pluginConfig });
   }
-  // Jira push not yet implemented — requires transition resolution.
 }

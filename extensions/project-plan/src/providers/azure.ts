@@ -5,12 +5,12 @@ import type {
   ProjectPlanIntegrationSettings,
   ProjectPlanItem,
   ProjectPlanItemType,
+  ProjectPlanPluginConfig,
   ProjectPlanSettings,
 } from "../types.js";
-
-const AZURE_API = "https://dev.azure.com";
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 1000;
+import { resolveProviderBaseUrl } from "./base-urls.js";
+import { fetchWithRetry } from "./fetch-retry.js";
+import type { ProviderFetchResult } from "./github.js";
 
 type AzureWorkItemRef = { id: number };
 type AzureWorkItemFields = {
@@ -23,25 +23,14 @@ type AzureWorkItemFields = {
 type AzureWorkItem = { id: number; fields: AzureWorkItemFields };
 type AzureWiqlResult = { workItems: AzureWorkItemRef[] };
 
-async function fetchWithRetry(
-  url: string,
-  headers: Record<string, string>,
-  init?: RequestInit,
-): Promise<Response> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * attempt));
-    }
-    try {
-      const res = await fetch(url, { headers, ...init });
-      if (res.status === 429) await new Promise((r) => setTimeout(r, 10_000));
-      return res;
-    } catch (err) {
-      lastError = err;
-    }
+function readAzureRateLimitWait(res: Response): number | null {
+  if (res.status !== 429) return null;
+  const retryAfter = res.headers.get("Retry-After");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
   }
-  throw lastError;
+  return 10_000;
 }
 
 function mapWorkItemType(typeName: string): ProjectPlanItemType {
@@ -56,16 +45,20 @@ export async function fetchAzureItems(params: {
   token: string;
   settings: Omit<ProjectPlanIntegrationSettings, "token">;
   planSettings: ProjectPlanSettings;
-}): Promise<ProjectPlanItem[]> {
-  const { token, settings, planSettings } = params;
+  pluginConfig?: ProjectPlanPluginConfig;
+}): Promise<ProviderFetchResult> {
+  const { token, settings, planSettings, pluginConfig } = params;
   const org = settings.organization ?? "";
   if (!org) throw new Error("project-plan: Azure DevOps organization is required");
-  // providerProjectId can be "MyProject" or "org/project" form.
   const projectId =
     planSettings.providerProjectId || settings.project || "";
   if (!projectId) throw new Error("project-plan: Azure DevOps project is required (set providerProjectId)");
 
-  const baseUrl = settings.hostUrl ?? AZURE_API;
+  const baseUrl = resolveProviderBaseUrl({
+    provider: "azure",
+    accountHostUrl: settings.hostUrl,
+    pluginConfig,
+  });
   const authHeader = `Basic ${Buffer.from(`:${token}`).toString("base64")}`;
   const headers = {
     Authorization: authHeader,
@@ -73,34 +66,41 @@ export async function fetchAzureItems(params: {
     "User-Agent": "openclaw-project-plan",
   };
 
-  // Run WIQL query.
   const wiqlRes = await fetchWithRetry(
     `${baseUrl}/${org}/${projectId}/_apis/wit/wiql?api-version=7.0`,
-    headers,
     {
       method: "POST",
+      headers,
       body: JSON.stringify({
         query:
           "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.State] <> 'Closed' AND [System.State] <> 'Resolved' ORDER BY [System.CreatedDate] ASC",
       }),
     },
+    { readRateLimitWait: readAzureRateLimitWait },
   );
   if (!wiqlRes.ok) throw new Error(`Azure WIQL error ${wiqlRes.status}: ${await wiqlRes.text()}`);
   const wiql = (await wiqlRes.json()) as AzureWiqlResult;
-  if (!wiql.workItems?.length) return [];
+  if (!wiql.workItems?.length) return { items: [] };
 
-  // Batch-fetch work item details (max 200 per request).
   const ids = wiql.workItems.map((r) => r.id);
   const orderById = new Map(ids.map((id, index) => [id, index]));
   const items: ProjectPlanItem[] = [];
+  const errors: string[] = [];
+  let partial = false;
   const BATCH = 200;
   for (let i = 0; i < ids.length; i += BATCH) {
     const batch = ids.slice(i, i + BATCH);
     const detailRes = await fetchWithRetry(
       `${baseUrl}/${org}/${projectId}/_apis/wit/workitems?ids=${batch.join(",")}&fields=System.Title,System.Description,System.WorkItemType,System.State,System.Parent&api-version=7.0`,
-      headers,
+      { headers },
+      { readRateLimitWait: readAzureRateLimitWait },
     );
-    if (!detailRes.ok) continue;
+    if (!detailRes.ok) {
+      const body = await detailRes.text().catch(() => "");
+      errors.push(`Azure detail batch ${i}-${i + batch.length} error ${detailRes.status}: ${body}`);
+      partial = true;
+      continue;
+    }
     const data = (await detailRes.json()) as { value: AzureWorkItem[] };
     const orderedBatch = [...data.value].sort(
       (a, b) => (orderById.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (orderById.get(b.id) ?? Number.MAX_SAFE_INTEGER),
@@ -117,7 +117,7 @@ export async function fetchAzureItems(params: {
       );
     }
   }
-  return items;
+  return { items, partial, errors: errors.length ? errors : undefined };
 }
 
 /** Update Azure work item state for resolved items. */
@@ -126,13 +126,18 @@ export async function pushAzureItems(params: {
   settings: Omit<ProjectPlanIntegrationSettings, "token">;
   planSettings: ProjectPlanSettings;
   items: ProjectPlanItem[];
+  pluginConfig?: ProjectPlanPluginConfig;
 }): Promise<void> {
-  const { token, settings, planSettings, items } = params;
+  const { token, settings, planSettings, items, pluginConfig } = params;
   const org = settings.organization ?? "";
   const projectId = planSettings.providerProjectId || settings.project || "";
   if (!org || !projectId) return;
 
-  const baseUrl = settings.hostUrl ?? AZURE_API;
+  const baseUrl = resolveProviderBaseUrl({
+    provider: "azure",
+    accountHostUrl: settings.hostUrl,
+    pluginConfig,
+  });
   const headers = {
     Authorization: `Basic ${Buffer.from(`:${token}`).toString("base64")}`,
     "Content-Type": "application/json-patch+json",
@@ -143,13 +148,14 @@ export async function pushAzureItems(params: {
     if (!item.externalId) continue;
     if (item.status !== "done" && item.status !== "cancelled") continue;
     const state = item.status === "done" ? "Closed" : "Removed";
-    await fetch(
+    await fetchWithRetry(
       `${baseUrl}/${org}/${projectId}/_apis/wit/workitems/${item.externalId}?api-version=7.0`,
       {
         method: "PATCH",
         headers,
         body: JSON.stringify([{ op: "replace", path: "/fields/System.State", value: state }]),
       },
+      { readRateLimitWait: readAzureRateLimitWait },
     );
   }
 }

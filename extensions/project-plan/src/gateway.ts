@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { recordAuditEvent } from "./audit.js";
 import { recomputeContainerStatuses } from "./execution.js";
 import { convertFileToItems } from "./llm-convert.js";
 import { syncFromProvider } from "./providers/index.js";
@@ -294,20 +295,43 @@ export function registerGatewayMethods(
         return;
       }
       const integration = await resolveIntegrationSettings(dir, source);
-      const { items, added, updated } = await syncFromProvider({
+      const { items, added, updated, partial, errors } = await syncFromProvider({
         source,
         token,
         settings: integration?.settings ?? {},
         planSettings: plan.settings,
         existingItems: plan.items,
+        pluginConfig,
       });
       plan.items = items;
       recomputeContainerStatuses(plan);
-      plan.logs.push(
-        createLog({ level: "info", message: `Sync complete: ${added} added, ${updated} updated.` }),
-      );
+      if (partial && errors?.length) {
+        plan.logs.push(
+          createLog({
+            level: "warn",
+            message: `Partial sync (${added} added, ${updated} updated): ${errors.slice(0, 3).join("; ")}`,
+          }),
+        );
+      } else {
+        plan.logs.push(
+          createLog({ level: "info", message: `Sync complete: ${added} added, ${updated} updated.` }),
+        );
+      }
       await savePlan(dir, plan, opts);
-      req.respond(true, { ok: true, added, updated });
+      await recordAuditEvent({
+        stateDir: dir,
+        event: {
+          type: "provider.sync",
+          planId,
+          source,
+          direction: "pull",
+          added,
+          updated,
+          partial: partial === true,
+          errorCount: errors?.length ?? 0,
+        },
+      });
+      req.respond(true, { ok: true, added, updated, partial: partial === true, errors });
     } catch (err) {
       req.respond(false, undefined, { message: String(err) });
     }

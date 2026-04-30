@@ -15,6 +15,55 @@
         "type": "number",
         "minimum": 1,
         "maximum": 480
+      },
+      "logSanitizeMode": {
+        "type": "string",
+        "enum": ["off", "mask"]
+      },
+      "logSanitizeMaxTitleChars": {
+        "type": "number",
+        "minimum": 8,
+        "maximum": 500
+      },
+      "overloadMaxRetries": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 10
+      },
+      "overloadRetryBaseDelayMs": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 60000
+      },
+      "transientCapacityMaxDelayMs": {
+        "type": "number",
+        "minimum": 1000,
+        "maximum": 600000
+      },
+      "providerBaseUrls": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "github": { "type": "string" },
+          "gitlab": { "type": "string" },
+          "jira": { "type": "string" },
+          "azure": { "type": "string" }
+        }
+      },
+      "fsBrowseAllowedRoots": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "webhookSecrets": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "github": { "type": "string" },
+          "gitlab": { "type": "string" },
+          "jira": { "type": "string" },
+          "azureUser": { "type": "string" },
+          "azurePassword": { "type": "string" }
+        }
       }
     }
   },
@@ -27,6 +76,46 @@
     "itemTimeoutMinutes": {
       "label": "Item Timeout (minutes)",
       "help": "Maximum time the agent is allowed per plan item before it is marked as failed (default: 60).",
+      "advanced": true
+    },
+    "logSanitizeMode": {
+      "label": "Log Sanitize Mode",
+      "help": "When 'mask', plan log messages strip emails/phones and truncate titles (KVKK/BDDK compliance). Default: off.",
+      "advanced": true
+    },
+    "logSanitizeMaxTitleChars": {
+      "label": "Log Sanitize Max Title Chars",
+      "help": "Maximum chars kept per title/description when sanitizing (default: 40).",
+      "advanced": true
+    },
+    "overloadMaxRetries": {
+      "label": "Overload Max Retries",
+      "help": "How many times a transient-overload agent run is retried per item (default: 2).",
+      "advanced": true
+    },
+    "overloadRetryBaseDelayMs": {
+      "label": "Overload Retry Base Delay (ms)",
+      "help": "Base wait between overload retries. Linear backoff applies (default: 2000).",
+      "advanced": true
+    },
+    "transientCapacityMaxDelayMs": {
+      "label": "Transient Capacity Max Delay (ms)",
+      "help": "Upper bound on wait time parsed from capacity Retry-After signals (default: 120000).",
+      "advanced": true
+    },
+    "providerBaseUrls": {
+      "label": "Provider Base URL Overrides",
+      "help": "Override provider API base URLs for on-prem, proxy, or GitHub Enterprise deployments.",
+      "advanced": true
+    },
+    "fsBrowseAllowedRoots": {
+      "label": "FS Browse Allowed Roots",
+      "help": "Absolute directories that the Project Path browser is allowed to enter. Empty = unrestricted (legacy).",
+      "advanced": true
+    },
+    "webhookSecrets": {
+      "label": "Webhook Secrets",
+      "help": "Per-provider shared secrets used to verify inbound webhook POSTs. Leave blank to disable a provider.",
       "advanced": true
     }
   }
